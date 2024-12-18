@@ -17,7 +17,16 @@ docker build -t 1224k/minedojo .
 cd omni-farm-isaac
 ```
 ### 1. Connet VPN
-Copy your .ovpn client config file to secrets/client.ovpn and install the config
+Copy your `.ovpn` client config file to secrets/client.ovpn and install the config
+
+Fill in the Omniverse Farm server information in secrets/env.sh, for example:
+```
+export FARM_API_KEY="s3cr3t"
+export FARM_URL="http://localhost:8222"
+export FARM_USER="j3soon"
+export NUCLEUS_HOSTNAME="localhost"
+```
+Then connet the VPN
 ```sh
 scripts/vpn/install_config.sh client.ovpn
 source secrets/env.sh
