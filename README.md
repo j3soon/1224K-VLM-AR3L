@@ -1,16 +1,14 @@
 # Simple Reward
 
 ## Setup
-```sh
-git clone https://github.com/1224K/minedojo.git
-```
+
 Download [MineCLIP](https://drive.google.com/file/d/1uaZM1ZLBz2dZWcn85rZmjP7LV6Sg5PZW/view) and place the `attn.pth` file in this repository.
 
 ## Build the Docker Images
 - ### minedojo
     ```sh
     cd minedojo/docker-minedojo
-    docker build -t 1224k/minedojo .
+    docker build -t minedojo .
     ```
 - ### metaworld
 
