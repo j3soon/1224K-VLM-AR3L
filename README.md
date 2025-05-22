@@ -1,4 +1,4 @@
-# Simple Reward
+# VLM-R3L
 
 ## Setup
 
