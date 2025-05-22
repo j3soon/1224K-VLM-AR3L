@@ -4,9 +4,11 @@ import PIL.Image as Image
 from gym.wrappers.time_limit import TimeLimit
 import gym
 from gym.spaces import Box
-from VLM import task_prompt, query_prompt, clip_env_prompts
-from VLM import phi
-from VLM import clip_infer_score
+from VLM import env_query_prompt, env_clip_prompts, two_label_env_query_prompt
+from VLM import phi, clip, deepseekVL
+import cv2
+from scipy.special import softmax
+
 def obs_to_image(obs):
     if isinstance(obs, torch.Tensor):
         obs = obs.cpu().numpy()
@@ -62,18 +64,25 @@ def make_minedojo_env(task):
     from animal_zoo import HuntCowDenseRewardEnv
     from animal_zoo import MilkCowDenseRewardEnv
     from mob_combat import CombatSpiderDenseRewardEnv
+    from animal_zoo import ShearSheepDenseRewardEnv
+    from animal_zoo import HarvestWaterDenseRewardEnv
+
     if task == "combat_spider":
         env = CombatSpiderDenseRewardEnv(step_penalty=0, attack_reward=1, success_reward=10)
     elif task == "milk_cow":
         env = MilkCowDenseRewardEnv(step_penalty=0, nav_reward_scale=0.1, success_reward=10)
     elif task == "hunt_cow":
         env = HuntCowDenseRewardEnv(step_penalty=0, nav_reward_scale=0.1, attack_reward=1, success_reward=10)
+    elif task == "shear_sheep":
+        env = ShearSheepDenseRewardEnv(step_penalty=0, nav_reward_scale=0.1, success_reward=10)
+    elif task == "harvest_water":
+        env = HarvestWaterDenseRewardEnv(step_penalty=0, nav_reward_scale=0.1, success_reward=10)
     else:
         raise NotImplementedError
     return env
     
 class make_reward_env(gym.Wrapper):
-    def __init__(self, env, env_name, task, reward_mode, reward_steps:int=1, reward_noise:float=0., reward_k:int=16, reward_model=None):
+    def __init__(self, env, env_name, task, reward_mode, reward_steps:int=1, reward_noise:float=0., reward_k:int=16, reward_model=None, pos_reward:float=0.1, neg_reward:float=-0.1):
         super().__init__(env)
         self.env = env
         self.env_name = env_name
@@ -85,37 +94,64 @@ class make_reward_env(gym.Wrapper):
         self._reward_noise = reward_noise
         self._reward_k = reward_k
         self.reward_model = reward_model
+        self._pos_reward = pos_reward
+        self._neg_reward = neg_reward
         print(f"reward_mode: {self._reward_mode}, reward_steps: {self._reward_steps}, reward_noise: {self._reward_noise}, reward_k: {self._reward_k}")
         self._prev_image = [None] * self._reward_k
         self._prev_reward = [0] * self._reward_k
         self.vlm_acc = 0
         self.vlm_cnt = 0
+        self.episode_success = 0
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         if self._reward_mode=="phi":
             self.vlm = phi()
+        elif self._reward_mode=="deepseekVL":
+            self.vlm = deepseekVL()
+        elif self._reward_mode=="clip":
+            self.vlm = clip()
+        elif self._reward_mode=="mineclip":
+            from mineclip import MineCLIP
+            self.vlm = MineCLIP(
+                arch="vit_base_p16_fz.v2.t2",
+                resolution=(160, 256),
+                pool_type="attn.d2.nh8.glusw",
+                image_feature_dim=512,
+                mlp_adapter_spec="v0-2.t0",
+                hidden_dim=512,
+            ).to(self.device)
+            self.vlm.load_ckpt("attn.pth")
+
+            # frame stack 16
+            from collections import deque
+            self._prev_image = deque(maxlen=16)
 
     def reset(self, **kwargs):
         self._steps = 0
+        self._prev_image = [None] * self._reward_k
+        if self._reward_mode=="mineclip":
+            from collections import deque
+            self._prev_image = deque(maxlen=16)
 
+        self._prev_reward = [0] * self._reward_k
+        self.episode_success = 0
         return self.env.reset(**kwargs)
     
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
-        self._steps += 1
         
-        # dense reward
+        # update info
+        if self.env_name == "metaworld":
+            self.episode_success = max(self.episode_success, info["success"])
+        elif self.env_name == "minedojo":
+            self.episode_success = max(self.episode_success, bool(reward >= 10))
+        info["is_success"] = self.episode_success
+
+        # dense reward: original reward
         if self._reward_mode=="dense":
-            if self._steps % self._reward_steps != 0:
-                reward = 0
-        # simple reward (oracle)
-        elif self._reward_mode=="simple":
-            simple_reward = 0
-            if self._steps % self._reward_steps == 0:
-                simple_reward = 0.1 if reward > 0 else 0
-                # add noise
-                if self._reward_noise > 0 and np.random.rand() < self._reward_noise:
-                    simple_reward = 0 if simple_reward > 0 else 0.1
-            reward = simple_reward
+            # if self._steps % self._reward_steps != 0:
+            #     reward = 0
+            pass
         # sparse reward
         elif self._reward_mode=="sparse":
             if self.env_name == "metaworld":
@@ -124,23 +160,32 @@ class make_reward_env(gym.Wrapper):
                 reward = 0 if reward < 10 else 10
             else:
                 raise NotImplementedError
-        # VLM reward
-        elif self._reward_mode=="phi":
+        # R3L reward (oracle)
+        elif self._reward_mode=="R3L":
+            R3L_reward = 0
+            if self._steps % self._reward_steps == 0:
+                R3L_reward = 0.1 if reward > 0 else 0
+                # add noise
+                if self._reward_noise > 0 and np.random.rand() < self._reward_noise:
+                    R3L_reward = 0 if R3L_reward > 0 else 0.1
+            reward = R3L_reward
+        # VLM-R3L no reward model
+        elif self._reward_mode=="phi" or self._reward_mode=="deepseekVL":
             vlm_reward = 0
             idx = self._steps % self._reward_k
             
             # get image
             if self.env_name == "metaworld":
-                image = obs_to_PIL_image(obs['image'])
+                image = self.env.render()[::-1, :, :]
+                image = Image.fromarray(image)
             elif self.env_name == "minedojo":
                 image = obs_to_PIL_image(obs['rgb'])
             else:
                 raise NotImplementedError
-            
             if self._steps % self._reward_steps == 0:
                 if self._prev_image[idx] is not None:
-                    res = self.vlm.query_1([self._prev_image[idx], image, query_prompt.format(task_prompt[self._task])])
-                    if "1" in res:
+                    res = self.vlm.query_1([self._prev_image[idx], image, two_label_env_query_prompt[self._task]])
+                    if "1" in res or "Yes" in res or "yes" in res:
                         vlm_reward = 0.1
                     else:
                         vlm_reward = 0
@@ -149,32 +194,110 @@ class make_reward_env(gym.Wrapper):
                     if (vlm_reward > 0) == (reward > self._prev_reward[idx]):
                         self.vlm_acc += 1
                     self.vlm_cnt += 1
+                # [NOTE] only support k % n == 0 to speed up fps
                 self._prev_image[idx] = image
                 self._prev_reward[idx] = reward
+            
             reward = vlm_reward
         # RL-VLM-F
         elif self._reward_mode=="RL-VLM-F":
             if self.env_name == "minedojo":
                 rgb_image = obs['rgb'].transpose(1, 2, 0) # (H, W, C)
-                image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # 轉置為 (C, H, W)
-                image = image.reshape(1, 3, image.shape[1], image.shape[2]) # 增加 batch 維度
             else:
-                raise NotImplementedError
-            
-            self.reward_model.add_data(obs['rgb'].flatten(), action, reward, done, img=rgb_image)
+                rgb_image = self.env.render()[::-1, :, :]
+                if "drawer" in self._task or "sweep" in self._task:
+                    rgb_image = rgb_image[100:400, 100:400, :]
+                rgb_image = cv2.resize(rgb_image, (300, 300))
+
+            image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # (C, H, W)
+            image = image.reshape(1, 3, image.shape[1], image.shape[2]) # (1, C, H, W)
+
+            self.reward_model.add_data(obs['rgb'].flatten() if self.env_name=="minedojo" else obs, action, reward, done, img=rgb_image)
             self.reward_model.eval()
             reward = self.reward_model.r_hat(image)
             self.reward_model.train()
+        # VLM-R3L reward model
+        elif self._reward_mode=="VLM-R3L":
+            vlm_reward = 0
+            idx = self._steps % self._reward_k
+
+            if self.env_name == "minedojo":
+                rgb_image = obs['rgb'].transpose(1, 2, 0) # (H, W, C)
+            else:
+                rgb_image = self.env.render()[::-1, :, :]
+                if "drawer" in self._task or "sweep" in self._task:
+                    rgb_image = rgb_image[100:400, 100:400, :]
+                rgb_image = cv2.resize(rgb_image, (300, 300))
+
+            image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # (C, H, W)
+            image = image.reshape(1, 3, image.shape[1], image.shape[2]) # (1, C, H, W)
+
+            self.reward_model.add_data(obs['rgb'].flatten() if self.env_name=="minedojo" else obs, action, reward, done, img=rgb_image)
+            self.reward_model.eval()
+            if self._prev_image[idx] is not None:
+                logits = self.reward_model.r_hat_pair(self._prev_image[idx], image)[0] # (2,)
+                logits_inverse = self.reward_model.r_hat_pair(image, self._prev_image[idx])[0] # (2,)
+                probs  = softmax(logits)
+                probs_inverse = softmax(logits_inverse)
+                if probs[1] > 0.52 and probs_inverse[0] > 0.52:
+                    vlm_reward = self._pos_reward
+                elif probs[0] > 0.52 and probs_inverse[1] > 0.52:
+                    vlm_reward = self._neg_reward
+                else:
+                    vlm_reward = 0
+                
+                # compute accuracy
+                if (vlm_reward > 0) == (reward > self._prev_reward[idx]):
+                    self.vlm_acc += 1
+                self.vlm_cnt += 1
+            elif self._steps > 0:
+                # 0 < _steps < self._reward_k use 0 as prev image
+                logits = self.reward_model.r_hat_pair(self._prev_image[0], image)[0] # (2,)
+                logits_inverse = self.reward_model.r_hat_pair(image, self._prev_image[0])[0]
+                probs  = softmax(logits)
+                probs_inverse = softmax(logits_inverse)
+                if probs[1] > 0.52 and probs_inverse[0] > 0.52:
+                    vlm_reward = self._pos_reward
+                elif probs[0] > 0.52 and probs_inverse[1] > 0.52:
+                    vlm_reward = self._neg_reward
+                else:
+                    vlm_reward = 0
+                # compute accuracy
+                if (vlm_reward > 0) == (reward > self._prev_reward[0]):
+                    self.vlm_acc += 1
+                self.vlm_cnt += 1
+
+            self.reward_model.train()
+            self._prev_image[idx] = image
+            self._prev_reward[idx] = reward
+
+            reward = vlm_reward
         # clip similarity score
         elif self._reward_mode=="clip":
             if self.env_name == "minedojo":
                 rgb_image = obs['rgb'].transpose(1, 2, 0) # (H, W, C)
             else:
                 raise NotImplementedError
-            clip_infer_score(rgb_image, clip_env_prompts[self._task]) * 2 - 1 # actually we should scale it [-1, 1] since tanh is used in the reward model
+            reward = self.vlm.clip_infer_score(rgb_image, env_clip_prompts[self._task]) * 2 - 1 # actually we should scale it [-1, 1] since tanh is used in the reward model
+        # mineclip similarity score
+        elif self._reward_mode=="mineclip":
+            if self.env_name == "minedojo":
+                rgb_image = torch.from_numpy(obs['rgb'].copy()).to(dtype=torch.float32, device=self.device) # PyTorch Tensor
+                self._prev_image.append(rgb_image)
+                if len(self._prev_image) == 16:
+                    image_tensor = torch.stack(list(self._prev_image))  # (16, C, H, W)
+                    image_tensor = image_tensor.unsqueeze(0)  # (1, 16, C, H, W)
+                    image_feats = self.vlm.forward_image_features(image_tensor)
+                    video_feats = self.vlm.forward_video_features(image_feats)
+                    reward = self.vlm.forward_reward_head(video_feats, text_tokens=env_clip_prompts[self._task])[0].item()
+                else:
+                    reward = 0
+            else:
+                raise NotImplementedError
         else:
             raise NotImplementedError
         
+        self._steps += 1
         return obs, reward, done, info
     
     def get_attr(self, str):

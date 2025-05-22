@@ -5,16 +5,14 @@ import torch.nn.functional as F
 import os
 import time
 
-import asyncio
 from PIL import Image
 import datetime
 import pickle as pkl
-import random
 import cv2
 
 from conv_net import CNN, fanin_init
-from VLM import task_prompt, query_prompt
-from VLM import phi
+from VLM import env_query_prompt, two_label_env_query_prompt
+from VLM import phi, deepseekVL, MiniCPM, Gemini
 
 device = 'cuda'
 
@@ -67,6 +65,52 @@ def gen_image_net2():
 
     model = ResNet(BasicBlock, [2, 2, 2, 2], num_classes=1)
     return model
+
+def gen_siamese_net(image_height, image_width, 
+                    conv_kernel_sizes=[5, 3, 3 ,3], 
+                    conv_n_channels=[16, 32, 64, 128], 
+                    conv_strides=[3, 2, 2, 2],
+                    embedding_dim=128):
+    class SiameseNetwork(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.shared_cnn = CNN(
+                kernel_sizes=conv_kernel_sizes,
+                n_channels=conv_n_channels,
+                strides=conv_strides,
+                output_size=embedding_dim,
+                paddings=np.zeros(len(conv_kernel_sizes), dtype=np.int64),
+                input_height=image_height,
+                input_width=image_width,
+                input_channels=3,
+                init_w=1e-3,
+                hidden_init=fanin_init,
+                hidden_sizes=[], 
+                batch_norm_conv=False,
+                batch_norm_fc=False
+            )
+
+            self.compare_fc = nn.Sequential(
+                nn.Linear(embedding_dim * 2, 64),
+                nn.ReLU(),
+                nn.Linear(64, 2)  # output: 1 -> image2 better, 0 -> not
+            )
+
+        def forward(self, x1, x2):
+            """
+            x1, x2 shape: (batch_size, 3, image_height, image_width)
+            return shape: (batch_size, 2)
+            """
+            f1 = self.shared_cnn(x1)  # (batch_size, embedding_dim)
+            f2 = self.shared_cnn(x2)  # (batch_size, embedding_dim)
+
+            combined = torch.cat([f1, f2], dim=1)  # (batch_size, embedding_dim*2)
+            
+            logits = self.compare_fc(combined)     # (batch_size, 2)
+            return logits
+
+    return SiameseNetwork().float()
+
 
 def KCenterGreedy(obs, full_obs, num_new_sample):
     selected_index = []
@@ -135,7 +179,7 @@ class RewardModel:
                 clip_prompt=None,
                 log_dir=None,
                 flip_vlm_label=False,
-                save_query_interval=25,
+                save_query_interval=1,
                 cached_label_path=None,
 
                 # image based reward
@@ -149,6 +193,7 @@ class RewardModel:
                 conv_kernel_sizes=[5, 3, 3 ,3],
                 conv_n_channels=[16, 32, 64, 128],
                 conv_strides=[3, 2, 2, 2],
+                R3L_or_PBRL = "R3L",
                 **kwargs
                 ):
         
@@ -173,6 +218,8 @@ class RewardModel:
         self.conv_kernel_sizes = conv_kernel_sizes
         self.conv_n_channels = conv_n_channels
         self.conv_strides = conv_strides
+
+        self.R3L_or_PBRL = R3L_or_PBRL
         
         if not image_reward:
             self.buffer_seg1 = np.empty((self.capacity, size_segment, self.ds+self.da), dtype=np.float32)
@@ -237,19 +284,24 @@ class RewardModel:
         
         file_path = os.path.abspath(__file__)
         dir_path = os.path.dirname(file_path)
-        #--------------------------------- modify by K
         if cached_label_path is not None:
             self.cached_label_path = "{}/{}".format(dir_path, cached_label_path)
         else:
             self.cached_label_path = None
-        #--------------------------------- 
         self.read_cache_idx = 0
         if self.cached_label_path is not None:
             all_cached_labels = sorted(os.listdir(self.cached_label_path))
             self.all_cached_labels = [os.path.join(self.cached_label_path, x) for x in all_cached_labels]
 
-        if vlm == 'phi':
-            self.vlm_model = phi()
+        if 'phi' in vlm:
+            self.vlm_model = phi(version=vlm[3:])
+        # MiniCPM-o2.6
+        elif 'MiniCPM' in vlm:
+            self.vlm_model = MiniCPM(version=vlm[8:])
+        elif vlm == 'deepseekVL':
+            self.vlm_model = deepseekVL()
+        elif 'gemini' in vlm:
+            self.vlm_model = Gemini(version=vlm[6:])
         
     def eval(self,):
         for i in range(self.de):
@@ -282,7 +334,9 @@ class RewardModel:
                                             out_size=1, H=self.reward_model_H, n_layers=self.reward_model_layers, 
                                             activation=self.activation)).float().to(device)
             else:
-                if not self.resnet:
+                if self.R3L_or_PBRL == "R3L":
+                    model = gen_siamese_net(self.image_height, self.image_width, self.conv_kernel_sizes, self.conv_n_channels, self.conv_strides).float().to(device)
+                elif not self.resnet:
                     model = gen_image_net(self.image_height, self.image_width, self.conv_kernel_sizes, self.conv_n_channels, self.conv_strides).float().to(device)
                 else:
                     model = gen_image_net2().float().to(device)
@@ -309,14 +363,14 @@ class RewardModel:
             if img is not None:
                 self.img_inputs.append(flat_img)
         elif done:
-            # ------------------------------------------- k modify -----------------------------------
-            # because early stop, need padding to max length
-            while len(self.inputs[-1]) < 500-1: # NOTE
-                self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
-                self.targets[-1] = np.concatenate([self.targets[-1], flat_target])
-                if img is not None:
-                    self.img_inputs[-1] = np.concatenate([self.img_inputs[-1], flat_img], axis=0)
-            # ------------------------------------------- k modify -----------------------------------
+            # # ------------------------------------------- k modify -----------------------------------
+            # # because early stop, need padding to max length
+            # while len(self.inputs[-1]) < 500-1: # NOTE
+            #     self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
+            #     self.targets[-1] = np.concatenate([self.targets[-1], flat_target])
+            #     if img is not None:
+            #         self.img_inputs[-1] = np.concatenate([self.img_inputs[-1], flat_img], axis=0)
+            # # ------------------------------------------- k modify -----------------------------------
 
             if 'Cloth' not in self.env_name:
                 self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
@@ -410,6 +464,9 @@ class RewardModel:
         # the network parameterizes r hat in eqn 1 from the paper
         return self.ensemble[member](torch.from_numpy(x).float().to(device))
 
+    def r_hat_member_pair(self, x, y, member=-1):
+        return self.ensemble[member](torch.from_numpy(x).float().to(device), torch.from_numpy(y).float().to(device))
+
     def r_hat(self, x):
         # they say they average the rewards from each member of the ensemble, but I think this only makes sense if the rewards are already normalized
         # but I don't understand how the normalization should be happening right now :(
@@ -418,6 +475,13 @@ class RewardModel:
             r_hats.append(self.r_hat_member(x, member=member).detach().cpu().numpy())
         r_hats = np.array(r_hats)
         return np.mean(r_hats)
+
+    def r_hat_pair(self, x, y):
+        r_hats = []
+        for member in range(self.de):
+            r_hats.append(self.r_hat_member_pair(x, y, member=member).detach().cpu().numpy())
+        r_hats = np.array(r_hats)
+        return np.mean(r_hats, axis=0)
     
     def r_hat_batch(self, x):
         # they say they average the rewards from each member of the ensemble, but I think this only makes sense if the rewards are already normalized
@@ -425,6 +489,14 @@ class RewardModel:
         r_hats = []
         for member in range(self.de):
             r_hats.append(self.r_hat_member(x, member=member).detach().cpu().numpy())
+        r_hats = np.array(r_hats)
+
+        return np.mean(r_hats, axis=0)
+
+    def r_hat_pair_batch(self, x, y):
+        r_hats = []
+        for member in range(self.de):
+            r_hats.append(self.r_hat_member_pair(x, y, member=member).detach().cpu().numpy())
         r_hats = np.array(r_hats)
 
         return np.mean(r_hats, axis=0)
@@ -463,96 +535,155 @@ class RewardModel:
             total += labels.size(0)
             for member in range(self.de):
                 # get logits
-                r_hat1 = self.r_hat_member(sa_t_1, member=member)
-                r_hat2 = self.r_hat_member(sa_t_2, member=member)
-                r_hat1 = r_hat1.sum(axis=1)
-                r_hat2 = r_hat2.sum(axis=1)
-                r_hat = torch.cat([r_hat1, r_hat2], axis=-1)                
-                _, predicted = torch.max(r_hat.data, 1)
+                if self.R3L_or_PBRL=="R3L":
+                    r_hat = self.r_hat_member_pair(sa_t_1, sa_t_2, member=member)
+                else:
+                    r_hat1 = self.r_hat_member(sa_t_1, member=member)
+                    r_hat2 = self.r_hat_member(sa_t_2, member=member)
+                    r_hat1 = r_hat1.sum(axis=1)
+                    r_hat2 = r_hat2.sum(axis=1)
+                    r_hat = torch.cat([r_hat1, r_hat2], axis=-1)
+
+                _, predicted = torch.max(r_hat.data, dim=1)
                 correct = (predicted == labels).sum().item()
                 ensemble_acc[member] += correct
                 
         ensemble_acc = ensemble_acc / total
         return np.mean(ensemble_acc)
     
-    def get_queries(self, mb_size=20):
-        len_traj, max_len = len(self.inputs[0]), len(self.inputs)
+    # def get_queries(self, mb_size=20):
+    #     len_traj, max_len = len(self.inputs[0]), len(self.inputs)
         
-        if len(self.inputs[-1]) < len_traj:
-            max_len = max_len - 1
+    #     if len(self.inputs[-1]) < len_traj:
+    #         max_len = max_len - 1
         
-        # get train traj
-        train_inputs = np.array(self.inputs[:max_len])
-        train_targets = np.array(self.targets[:max_len])
-        if self.vlm_label or self.image_reward:
-            train_images = np.array(self.img_inputs[:max_len])
-            if 'Cloth' in self.env_name:
-                train_images = train_images.squeeze(1)
+    #     # get train traj
+    #     train_inputs = np.array(self.inputs[:max_len])
+    #     train_targets = np.array(self.targets[:max_len])
+    #     if self.vlm_label or self.image_reward:
+    #         train_images = np.array(self.img_inputs[:max_len])
+    #         if 'Cloth' in self.env_name:
+    #             train_images = train_images.squeeze(1)
 
-        batch_index_2 = np.random.choice(max_len, size=mb_size, replace=True)
-        sa_t_2 = train_inputs[batch_index_2] # Batch x T x dim of s&a
-        r_t_2 = train_targets[batch_index_2] # Batch x T x 1
-        if self.vlm_label or self.image_reward:
-            img_t_2 = train_images[batch_index_2] # Batch x T x *img_dim
+    #     batch_index_2 = np.random.choice(max_len, size=mb_size, replace=True)
+    #     sa_t_2 = train_inputs[batch_index_2] # Batch x T x dim of s&a
+    #     r_t_2 = train_targets[batch_index_2] # Batch x T x 1
+    #     if self.vlm_label or self.image_reward:
+    #         img_t_2 = train_images[batch_index_2] # Batch x T x *img_dim
         
-        batch_index_1 = np.random.choice(max_len, size=mb_size, replace=True)
-        sa_t_1 = train_inputs[batch_index_1] # Batch x T x dim of s&a
-        r_t_1 = train_targets[batch_index_1] # Batch x T x 1
-        if self.vlm_label or self.image_reward:
-            img_t_1 = train_images[batch_index_1] # Batch x T x *img_dim
+    #     batch_index_1 = np.random.choice(max_len, size=mb_size, replace=True)
+    #     sa_t_1 = train_inputs[batch_index_1] # Batch x T x dim of s&a
+    #     r_t_1 = train_targets[batch_index_1] # Batch x T x 1
+    #     if self.vlm_label or self.image_reward:
+    #         img_t_1 = train_images[batch_index_1] # Batch x T x *img_dim
                 
-        sa_t_1 = sa_t_1.reshape(-1, sa_t_1.shape[-1]) # (Batch x T) x dim of s&a
-        r_t_1 = r_t_1.reshape(-1, r_t_1.shape[-1]) # (Batch x T) x 1
-        sa_t_2 = sa_t_2.reshape(-1, sa_t_2.shape[-1]) # (Batch x T) x dim of s&a
-        r_t_2 = r_t_2.reshape(-1, r_t_2.shape[-1]) # (Batch x T) x 1
-        if self.vlm_label or self.image_reward:
-            img_t_1 = img_t_1.reshape(-1, img_t_1.shape[2], img_t_1.shape[3], img_t_1.shape[4])
-            img_t_2 = img_t_2.reshape(-1, img_t_2.shape[2], img_t_2.shape[3], img_t_2.shape[4])
+    #     sa_t_1 = sa_t_1.reshape(-1, sa_t_1.shape[-1]) # (Batch x T) x dim of s&a
+    #     r_t_1 = r_t_1.reshape(-1, r_t_1.shape[-1]) # (Batch x T) x 1
+    #     sa_t_2 = sa_t_2.reshape(-1, sa_t_2.shape[-1]) # (Batch x T) x dim of s&a
+    #     r_t_2 = r_t_2.reshape(-1, r_t_2.shape[-1]) # (Batch x T) x 1
+    #     if self.vlm_label or self.image_reward:
+    #         img_t_1 = img_t_1.reshape(-1, img_t_1.shape[2], img_t_1.shape[3], img_t_1.shape[4])
+    #         img_t_2 = img_t_2.reshape(-1, img_t_2.shape[2], img_t_2.shape[3], img_t_2.shape[4])
 
-        # Generate time index 
-        time_index = np.array([list(range(i*len_traj, i*len_traj+self.size_segment)) for i in range(mb_size)])
-        if 'Cloth' not in self.env_name:
-            random_idx_2 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
-            time_index_2 = time_index + random_idx_2
-            random_idx_1 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
-            time_index_1 = time_index + random_idx_1
-        else:
-            time_index_2 = time_index
-            time_index_1 = time_index
-        if self.vlm_label or self.image_reward:
-            if self.vlm_label == 1 or self.image_reward: # use a single image for querying vlm for the labeling
-                image_time_index = np.array([[i*len_traj+self.size_segment - 1] for i in range(mb_size)])
-            else:
-                interval = self.size_segment // self.vlm_label
-                image_time_index = np.array([[i * len_traj + self.size_segment - 1 - j * interval for j in range(self.vlm_label - 1, -1, -1)] for i in range(mb_size)])
-                image_time_index = np.maximum(image_time_index, 0)
+    #     # Generate time index 
+    #     time_index = np.array([list(range(i*len_traj, i*len_traj+self.size_segment)) for i in range(mb_size)])
+    #     if 'Cloth' not in self.env_name:
+    #         random_idx_2 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
+    #         time_index_2 = time_index + random_idx_2
+    #         random_idx_1 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
+    #         time_index_1 = time_index + random_idx_1
+    #     else:
+    #         time_index_2 = time_index
+    #         time_index_1 = time_index
+    #     if self.vlm_label or self.image_reward:
+    #         if self.vlm_label == 1 or self.image_reward: # use a single image for querying vlm for the labeling
+    #             image_time_index = np.array([[i*len_traj+self.size_segment - 1] for i in range(mb_size)])
+    #         else:
+    #             interval = self.size_segment // self.vlm_label
+    #             image_time_index = np.array([[i * len_traj + self.size_segment - 1 - j * interval for j in range(self.vlm_label - 1, -1, -1)] for i in range(mb_size)])
+    #             image_time_index = np.maximum(image_time_index, 0)
 
-            if 'Cloth' not in self.env_name:
-                image_time_index_2 = image_time_index + random_idx_2
-                image_time_index_1 = image_time_index + random_idx_1
-            else:
-                image_time_index_2 = image_time_index
-                image_time_index_1 = image_time_index
+    #         if 'Cloth' not in self.env_name:
+    #             image_time_index_2 = image_time_index + random_idx_2
+    #             image_time_index_1 = image_time_index + random_idx_1
+    #         else:
+    #             image_time_index_2 = image_time_index
+    #             image_time_index_1 = image_time_index
 
-        sa_t_1 = np.take(sa_t_1, time_index_1, axis=0) # Batch x size_seg x dim of s&a
-        r_t_1 = np.take(r_t_1, time_index_1, axis=0) # Batch x size_seg x 1
-        sa_t_2 = np.take(sa_t_2, time_index_2, axis=0) # Batch x size_seg x dim of s&a
-        r_t_2 = np.take(r_t_2, time_index_2, axis=0) # Batch x size_seg x 1
-        if self.vlm_label or self.image_reward:
-            img_t_1 = np.take(img_t_1, image_time_index_1, axis=0) # Batch x vlm_label x *img_dim
-            img_t_2 = np.take(img_t_2, image_time_index_2, axis=0) # Batch x vlm_label x *img_dim
+    #     sa_t_1 = np.take(sa_t_1, time_index_1, axis=0) # Batch x size_seg x dim of s&a
+    #     r_t_1 = np.take(r_t_1, time_index_1, axis=0) # Batch x size_seg x 1
+    #     sa_t_2 = np.take(sa_t_2, time_index_2, axis=0) # Batch x size_seg x dim of s&a
+    #     r_t_2 = np.take(r_t_2, time_index_2, axis=0) # Batch x size_seg x 1
+    #     if self.vlm_label or self.image_reward:
+    #         img_t_1 = np.take(img_t_1, image_time_index_1, axis=0) # Batch x vlm_label x *img_dim
+    #         img_t_2 = np.take(img_t_2, image_time_index_2, axis=0) # Batch x vlm_label x *img_dim
             
-            batch_size, horizon, image_height, image_width, _ = img_t_1.shape
+    #         batch_size, horizon, image_height, image_width, _ = img_t_1.shape
 
-            transposed_images = np.transpose(img_t_1, (0, 2, 1, 3, 4))
-            img_t_1 = transposed_images.reshape(batch_size, image_height, horizon * image_width, 3) # batch x image_height x (time_horizon * image_width) x 3
-            transposed_images = np.transpose(img_t_2, (0, 2, 1, 3, 4))
-            img_t_2 = transposed_images.reshape(batch_size, image_height, horizon * image_width, 3) # batch x image_height x (time_horizon * image_width) x 3
+    #         transposed_images = np.transpose(img_t_1, (0, 2, 1, 3, 4))
+    #         img_t_1 = transposed_images.reshape(batch_size, image_height, horizon * image_width, 3) # batch x image_height x (time_horizon * image_width) x 3
+    #         transposed_images = np.transpose(img_t_2, (0, 2, 1, 3, 4))
+    #         img_t_2 = transposed_images.reshape(batch_size, image_height, horizon * image_width, 3) # batch x image_height x (time_horizon * image_width) x 3
         
-        if not self.vlm_label and not self.image_reward:
+    #     if not self.vlm_label and not self.image_reward:
+    #         return sa_t_1, sa_t_2, r_t_1, r_t_2
+    #     else:
+    #         return sa_t_1, sa_t_2, r_t_1, r_t_2, img_t_1, img_t_2
+
+    def get_queries(self, mb_size=20):
+        num_eps = len(self.inputs)
+
+        if len(self.inputs[-1]) == 0:
+            num_eps -= 1
+        if num_eps <= 0:
+            return None, None, None, None
+
+        sa_t_1_list = []
+        sa_t_2_list = []
+        r_t_1_list  = []
+        r_t_2_list  = []
+        if self.image_reward:
+            img_t_1_list = []
+            img_t_2_list = []
+
+        for _ in range(mb_size):
+            ep_idx_1 = np.random.randint(0, num_eps)
+            ep_idx_2 = np.random.randint(0, num_eps)
+
+            T1 = self.inputs[ep_idx_1].shape[0]
+            T2 = self.inputs[ep_idx_2].shape[0]
+            t1 = np.random.randint(0, T1 - self.size_segment + 1)
+            t2 = np.random.randint(0, T2 - self.size_segment + 1)
+
+            sa_1 = self.inputs[ep_idx_1][t1 : t1 + self.size_segment]   # shape (ds+da,)
+            sa_2 = self.inputs[ep_idx_2][t2 : t2 + self.size_segment]   # shape (ds+da,)
+            r_1  = self.targets[ep_idx_1][t1 : t1 + self.size_segment]  # shape (1,)
+            r_2  = self.targets[ep_idx_2][t2 : t2 + self.size_segment]  # shape (1,)
+
+            sa_t_1_list.append(sa_1)
+            sa_t_2_list.append(sa_2)
+            r_t_1_list.append(r_1)
+            r_t_2_list.append(r_2)
+
+            if self.image_reward:
+                # [Note] now we only support single image for each query
+                img_1 = self.img_inputs[ep_idx_1][t1]  # (H, W, 3)
+                img_2 = self.img_inputs[ep_idx_2][t2]  # (H, W, 3)
+                img_t_1_list.append(img_1)
+                img_t_2_list.append(img_2)
+
+        sa_t_1 = np.array(sa_t_1_list, dtype=np.float32)  # (mb_size, ds+da)
+        sa_t_2 = np.array(sa_t_2_list, dtype=np.float32)
+        r_t_1  = np.array(r_t_1_list,  dtype=np.float32)  # (mb_size, 1)
+        r_t_2  = np.array(r_t_2_list,  dtype=np.float32)
+
+        if not self.image_reward:
             return sa_t_1, sa_t_2, r_t_1, r_t_2
         else:
+            img_t_1 = np.array(img_t_1_list, dtype=np.uint8) # (mb_size, H, W, 3)
+            img_t_2 = np.array(img_t_2_list, dtype=np.uint8)
             return sa_t_1, sa_t_2, r_t_1, r_t_2, img_t_1, img_t_2
+
 
     def put_queries(self, sa_t_1, sa_t_2, labels):
         total_sample = sa_t_1.shape[0]
@@ -664,97 +795,55 @@ class RewardModel:
                 else:
                     useful_indices.append(1)
                         
-            # if self.vlm == 'gpt4v_two_image': 
-            #     from vlms.gpt4_infer import gpt4v_infer_2
-            #     vlm_labels = []
-            #     for idx, (img_path_1, img_path_2) in enumerate(gpt_two_image_paths):
-            #         print("querying vlm {}/{}".format(idx, len(gpt_two_image_paths)))
-            #         query_prompt = gpt_free_query_env_prompts[self.env_name]
-            #         summary_prompt = gpt_summary_env_prompts[self.env_name]
-            #         res = gpt4v_infer_2(query_prompt, summary_prompt, img_path_1, img_path_2)
-            #         try:
-            #             label_res = int(res)
-            #         except:
-            #             label_res = -1
+            if self.vlm == "oracle":
+                vlm_labels = []
+                for (r1, r2) in zip(r_t_1, r_t_2):
+                    if r1 < r2:
+                        vlm_labels.append(1)
+                    else:
+                        vlm_labels.append(0)
 
-            #         vlm_labels.append(label_res)
-            #         time.sleep(0.1)
-            # elif self.vlm == 'gemini_single_prompt':
-            #     vlm_labels = []
-            #     for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
-            #         res = gemini_query_1([
-            #             gemini_free_query_prompt1,
-            #             Image.fromarray(img1), 
-            #             gemini_free_query_prompt2,
-            #             Image.fromarray(img2), 
-            #             gemini_single_query_env_prompts[self.env_name],
-            #         ])
-            #         try:
-            #             if "-1" in res:
-            #                 res = -1
-            #             elif "0" in res:
-            #                 res = 0
-            #             elif "1" in res:
-            #                 res = 1
-            #             else:
-            #                 res = -1
-            #         except:
-            #             res = -1 
-            #         vlm_labels.append(res)
-            # elif self.vlm == "gemini_free_form":
-            #     vlm_labels = []
-            #     for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
-            #         res = gemini_query_2(
-            #                 [
-            #                     gemini_free_query_prompt1,
-            #                     Image.fromarray(img1), 
-            #                     gemini_free_query_prompt2,
-            #                     Image.fromarray(img2), 
-            #                     gemini_free_query_env_prompts[self.env_name]
-            #         ],
-            #                     gemini_summary_env_prompts[self.env_name]
-            #         )
-            #         try:
-            #             res = int(res)
-            #             if res not in [0, 1, -1]:
-            #                 res = -1
-            #         except:
-            #             res = -1
-            #         vlm_labels.append(res)  
-            # #--------------------------------- modify by K 
-            # elif self.vlm == "MiniCPM-Llama3-V-2_5":
-            #     from vlms.MiniCPM_infer import MiniCPM_query
-            #     vlm_labels = []
-            #     for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
-            #         res = MiniCPM_query([
-            #                     gemini_free_query_prompt1,
-            #                     Image.fromarray(img1), 
-            #                     gemini_free_query_prompt2,
-            #                     Image.fromarray(img2), 
-            #                     gemini_free_query_env_prompts[self.env_name]
-            #                 ],
-            #                     gemini_summary_env_prompts[self.env_name]
-            #         )
-            #         try:
-            #             res = int(res)
-            #             if res not in [0, 1, -1]:
-            #                 res = -1
-            #         except:
-            #             res = -1
-            #         vlm_labels.append(res) 
-
-            if self.vlm == "phi":
+            elif "phi" in self.vlm:
                 vlm_labels = []
                 for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
-                    res = self.vlm_model.query_1([Image.fromarray(img1), Image.fromarray(img2), query_prompt.format(task_prompt[self.env_name])])
+                    res = self.vlm_model.query_1([Image.fromarray(img1), Image.fromarray(img2), two_label_env_query_prompt[self.env_name]])
                     try:
-                        res = int(res)
-                        if res not in [0, 1, -1]:
-                            res = -1
+                        if "1" in res:
+                            res = 1
+                        else:
+                            res = 0
                     except:
                         res = -1
                     vlm_labels.append(res) 
-             #---------------------------------
+            elif "MiniCPM" in self.vlm or "gemini" in self.vlm:
+                vlm_labels = []
+                for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    res = self.vlm_model.query_1([Image.fromarray(img1), Image.fromarray(img2), env_query_prompt[self.env_name]])
+                    try:
+                        res = int(res) - 1
+                    except:
+                        res = -1
+                    if self.R3L_or_PBRL == "R3L" and res==-1:
+                        res = 0
+                    vlm_labels.append(res)
+
+            # TODO
+            elif self.vlm == "deepseekVL":
+                vlm_labels = []
+                for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    res = self.vlm_model.query_1([Image.fromarray(img1), Image.fromarray(img2), env_query_prompt[self.env_name]])
+                    try:
+                        # because deepseek return "Yes" or "No"
+                        if "1" in res or "Yes" in res or "yes" in res:
+                            res = 1
+                        elif "0" in res or "No" in res or "no" in res:
+                            res = 0
+                        else:
+                            res = -1
+                    except:
+                        res = -1
+                    vlm_labels.append(res)
+            #---------------------------------
             vlm_labels = np.array(vlm_labels).reshape(-1, 1)
             good_idx = (vlm_labels != -1).flatten()
             useful_indices = (np.array(useful_indices) == 1).flatten()
@@ -1071,12 +1160,15 @@ class RewardModel:
                     sa_t_2 = sa_t_2.squeeze(1)
 
                 # get logits
-                r_hat1 = self.r_hat_member(sa_t_1, member=member)
-                r_hat2 = self.r_hat_member(sa_t_2, member=member)
-                if not self.image_reward:
-                    r_hat1 = r_hat1.sum(axis=1)
-                    r_hat2 = r_hat2.sum(axis=1)
-                r_hat = torch.cat([r_hat1, r_hat2], axis=-1)
+                if self.R3L_or_PBRL == "R3L":
+                    r_hat = self.r_hat_member_pair(sa_t_1, sa_t_2, member=member)
+                else:
+                    r_hat1 = self.r_hat_member(sa_t_1, member=member)
+                    r_hat2 = self.r_hat_member(sa_t_2, member=member)
+                    if not self.image_reward:
+                        r_hat1 = r_hat1.sum(axis=1)
+                        r_hat2 = r_hat2.sum(axis=1)
+                    r_hat = torch.cat([r_hat1, r_hat2], axis=-1)
 
                 # compute loss
                 curr_loss = self.CEloss(r_hat, labels)
@@ -1084,7 +1176,7 @@ class RewardModel:
                 ensemble_losses[member].append(curr_loss.item())
                 
                 # compute acc
-                _, predicted = torch.max(r_hat.data, 1)
+                _, predicted = torch.max(r_hat.data, dim=1)
                 correct = (predicted == labels).sum().item()
                 ensemble_acc[member] += correct
                 
