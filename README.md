@@ -3,19 +3,19 @@
 
 ## Demo
 <p align="center">
-  <img src="demo/cartpole.gif"  alt="CartPole"        width="144"/>
-  <img src="demo/rope.gif"      alt="Straighten Rope" width="144"/>
-  <img src="demo/pass_water.gif" alt="Pass Water"     width="144"/>
-  <img src="demo/soccer.gif" alt="Soccer"     width="144"/>
-  <img src="demo/sweep_into.gif" alt="Sweep Into"     width="144"/>
+  <img src="demo/cartpole.gif"  alt="CartPole"        width="120"/>
+  <img src="demo/rope.gif"      alt="Straighten Rope" width="120"/>
+  <img src="demo/pass_water.gif" alt="Pass Water"     width="120"/>
+  <img src="demo/soccer.gif" alt="Soccer"     width="120"/>
+  <img src="demo/sweep_into.gif" alt="Sweep Into"     width="120"/>
+  <img src="demo/drawer_open.gif"  alt="Drawer Open"        width="120"/>
 </p>
 
 <p align="center">
-  <img src="demo/drawer_open.gif"  alt="Drawer Open"        width="144"/>
-  <img src="demo/combat_spider.gif"      alt="Combat Spider" width="144"/>
-  <img src="demo/milk_cow.gif" alt="Milk Cow"     width="144"/>
-  <img src="demo/shear_sheep.gif" alt="Shear Sheep"     width="144"/>
-  <!-- <img src="demo/hunt_cow.gif" alt="Hunt Cow"     width="144"/> -->
+  <img src="demo/combat_spider.gif"      alt="Combat Spider" width="180"/>
+  <img src="demo/milk_cow.gif" alt="Milk Cow"     width="180"/>
+  <img src="demo/shear_sheep.gif" alt="Shear Sheep"     width="180"/>
+  <!-- <img src="demo/hunt_cow.gif" alt="Hunt Cow"     width="180"/> -->
 </p>
 ## Setup
 
