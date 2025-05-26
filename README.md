@@ -2,9 +2,11 @@
 ![Framework](demo/framework.png)
 
 ## Demo
-![CartPole](demo/cartpole.gif)
-![Straighten Rope](demo/rope.gif)
-![Pass Water](demo/pass_water.gif)
+<p align="center">
+  <img src="demo/cartpole.gif"  alt="CartPole"        width="240"/>
+  <img src="demo/rope.gif"      alt="Straighten Rope" width="240"/>
+  <img src="demo/pass_water.gif" alt="Pass Water"     width="240"/>
+</p>
 
 ## Setup
 
