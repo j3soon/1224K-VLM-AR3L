@@ -17,6 +17,7 @@
   <img src="demo/shear_sheep.gif" alt="Shear Sheep"     width="180"/>
   <img src="demo/hunt_cow.gif" alt="Hunt Cow"     width="180"/>
 </p>
+
 ## Setup
 
 Download [MineCLIP](https://drive.google.com/file/d/1uaZM1ZLBz2dZWcn85rZmjP7LV6Sg5PZW/view) and place the `attn.pth` file in this repository.
