@@ -1,8 +1,10 @@
 # VLM-R3L
-![Framework](docs/framework.png)
+![Framework](demo/framework.png)
 
 ## Demo
-![CartPole](docs/cartpole.gif)
+![CartPole](demo/cartpole.gif)
+![Straighten Rope](demo/rope.gif)
+![Pass Water](demo/pass_water.gif)
 
 ## Setup
 
