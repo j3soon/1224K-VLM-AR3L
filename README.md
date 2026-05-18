@@ -43,7 +43,7 @@ Download [MineCLIP](https://drive.google.com/file/d/1uaZM1ZLBz2dZWcn85rZmjP7LV6S
 | minedojo | combat_spider, milk_cow, shear_sheep, hunt_cow |
 
 ```sh
-python run_ppo.py --mode train --task combat_spider --reward_mode VLM-AR3L --vlm gemini2.0
+python run_ppo.py mode=train task=hunt_cow reward_mode=VLM-AR3L vlm=gemini2.0 seed=1
 ```
 
 ```sh

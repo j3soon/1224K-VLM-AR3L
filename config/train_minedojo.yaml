@@ -1,0 +1,61 @@
+defaults:
+  - _self_
+
+experiment: VLM-AR3L
+
+mode: train
+env: minedojo
+task: hunt_cow
+algo: ppo
+seed: 1
+device: cuda
+
+reward_mode: VLM-AR3L
+vlm: gemini2.0
+k: 16
+pos_reward: 0.1
+neg_reward: -0.1
+absolute_alpha: 0.5
+confidence_threshold: 0.52
+
+# reward model
+reward_batch: 100
+reward_lr: 0.0003
+reward_capacity_train: 5000
+# reward_capacity_train: 500000
+reward_capacity_eval: 40000
+reward_update: 100
+max_feedback: 500000
+
+# 
+observation_space: 122880 #160 * 256 * 3
+action_space: 8
+# MineCLIP
+mineclip_ckpt: attn.pth
+image_height: 160
+image_width: 256
+image_feature_dim: 512
+frame_stack: 4
+n_envs: 4
+
+# training
+num_train_steps: 1000000
+eval_frequency: 5120
+num_eval_episodes: 5
+ent_coef: 0.01
+
+# eval
+eval_times: 20
+eval_model_dir: null
+
+# logging / saving
+save_gif: true
+save_model: true
+log_level: ERROR
+
+# output naming
+exp_name: gemini_template_1
+
+hydra:
+  run:
+    dir: ./exp/${exp_name}/${env}/${now:%Y-%m-%d}-${now:%H-%M-%S}/${task}/${algo}/${reward_mode}_vlm${vlm}_k${k}_alpha${absolute_alpha}_tau${confidence_threshold}_seed${seed}

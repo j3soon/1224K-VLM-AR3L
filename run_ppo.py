@@ -6,8 +6,7 @@
 
 import os
 import numpy as np
-from stable_baselines3 import PPO, SAC
-from PIL import Image
+from stable_baselines3 import PPO
 import torch
 import gym
 from gym.spaces import Box
@@ -16,13 +15,15 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import EvalCallback, BaseCallback
 import imageio
 from mineclip import MineCLIP
-import matplotlib.pyplot as plt
 import logging
 import argparse
 import utils
 from reward_model import RewardModel
-from scipy.special import softmax
-import cv2
+import hydra
+from omegaconf import OmegaConf
+from hydra.utils import get_original_cwd
+from hydra.core.hydra_config import HydraConfig
+logger = logging.getLogger(__name__)
 
 class MineCLIPFeatureWrapper(gym.ObservationWrapper):
     def __init__(self, env, mineclip_model):
@@ -178,7 +179,33 @@ class SaveRewardModelCallback(BaseCallback):
             print(f"Saved reward model to {self.save_path} at step {steps}")
         return True
     
-def train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, seed, pos_reward=0.1, neg_reward=-0.1, absolute_alpha=0.5, confidence_threshold=0.52):
+def train_and_evaluate(cfg):
+    mode = cfg.mode
+    env_name = cfg.env
+    task = cfg.task
+    algo = cfg.algo
+    reward_mode = cfg.reward_mode
+    vlm = cfg.vlm
+    reward_k = cfg.k
+    seed = cfg.seed
+    pos_reward = cfg.pos_reward
+    neg_reward = cfg.neg_reward
+    absolute_alpha = cfg.absolute_alpha
+    confidence_threshold = cfg.confidence_threshold
+
+    work_dir = HydraConfig.get().runtime.output_dir
+    print(f"[INFO] workspace: {work_dir}")
+
+    model_dir = os.path.join(work_dir, "model")
+    gif_dir = os.path.join(work_dir, "gifs")
+    log_dir = os.path.join(work_dir, "logs_result")
+    tb_log_dir = os.path.join(work_dir, "tensorboard")
+
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(gif_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(tb_log_dir, exist_ok=True)
+    
     if reward_mode == "RL-VLM-F":
         name = f"{reward_mode}_{vlm}"
     elif reward_mode == "VLM-AR3L":
@@ -189,30 +216,26 @@ def train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, s
     print(f"[INFO] model path: {path}")
 
     reward_model = None
-    observation_space = 160 * 256 * 3
-    action_space = 8
-    image_height = 160
-    image_width = 256
 
     if reward_mode == "RL-VLM-F" or reward_mode == "VLM-AR3L":
         reward_model = RewardModel(
-            observation_space,
-            action_space,
-            mb_size = 100, # [NOTE]
-            log_dir = f"./model/{path}",
-            capacity = 5e5 if "train" in mode else 40000, # [NOTE]
-            lr = 3e-4, # [NOTE]
-            ### vlm parameters
-            vlm=vlm,
-            env_name=env_name,
-            task=task,
-            ### image-based reward model parameters
+            cfg.observation_space,
+            cfg.action_space,
+            mb_size=cfg.reward_batch,
+            log_dir=model_dir,
+            capacity=cfg.reward_capacity_train if "train" in mode else cfg.reward_capacity_eval,
+            lr=cfg.reward_lr,
+
+            vlm=cfg.vlm,
+            env_name=cfg.env,
+            task=cfg.task,
+
             image_reward=True,
-            image_height=image_height,
-            image_width=image_width,
+            image_height=cfg.image_height,
+            image_width=cfg.image_width,
             resize_factor=1,
             resnet=True,
-            reward_mode = reward_mode,
+            reward_mode=cfg.reward_mode,
         )
 
     eval_env = utils.make_minedojo_env(task)
@@ -232,8 +255,13 @@ def train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, s
         mlp_adapter_spec="v0-2.t0",
         hidden_dim=512,
     ).to(device)
-    mineclip_model.load_ckpt("attn.pth")
-    logger.info(f" Load MineCLIP model")
+    mineclip_ckpt = cfg.mineclip_ckpt
+
+    if not os.path.isabs(mineclip_ckpt):
+        mineclip_ckpt = os.path.join(get_original_cwd(), mineclip_ckpt)
+
+    print(f"[INFO] MineCLIP ckpt: {mineclip_ckpt}")
+    mineclip_model.load_ckpt(mineclip_ckpt)
 
     # Define the action transformation function
     transform = utils.minedojo_transform_action_multi_discrete
@@ -251,249 +279,135 @@ def train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, s
         train_env = VecFrameStack(train_env, n_stack=4)
 
     if "train" in mode:
-        # tensorboard writer
-        tb_log_dir = f"./tensorboard/{path}"
-
-        # Create the evaluation callback
         eval_callback = EvalCallbackWithGif(
-            env_name=env_name,
-            task=task,
+            env_name=cfg.env,
+            task=cfg.task,
             eval_env=eval_env,
-            n_eval_episodes=5,
-            best_model_save_path=f'./model/{path}',
-            log_path=f'./logs_result/{path}',
-            eval_freq=5120,  # n_envs * n_steps = 4 * 5120 = 20480
-            gif_path=f'./gifs/{path}',
+            n_eval_episodes=cfg.num_eval_episodes,
+            best_model_save_path=model_dir,
+            log_path=log_dir,
+            eval_freq=cfg.eval_frequency,
+            gif_path=gif_dir,
             deterministic=True,
             render=False,
             reward_model=reward_model,
-            k=reward_k,
-            pos_reward=pos_reward,
-            neg_reward=neg_reward,
+            k=cfg.k,
+            pos_reward=cfg.pos_reward,
+            neg_reward=cfg.neg_reward,
         )
 
-    if mode=='noop':
-        obs = eval_env.reset()
-        done = False
-        total_reward = 0
-        images = []
-        t = 0
-        while not done:
-            action = eval_env.action_space.no_op()
-            if t == 0:
-                action[3] = 13
-            else:
-                action[3] = 12
-            t = 1
-            print(action)
-            obs, reward, done, info = eval_env.step(action)
-            total_reward += reward
-            rgb_image = utils.obs_to_image(obs)
-            images.append(rgb_image)
+    if "eval" in mode:
+        eval_model_dir = cfg.get("eval_model_dir", model_dir)
+        eval_gif_dir = os.path.join(work_dir, "eval_gifs")
+        os.makedirs(eval_gif_dir, exist_ok=True)
 
-        print(f"Total reward: {total_reward}")
-    elif "random" in mode:
-        obs = eval_env.reset()
-        done = False
-        total_reward = 0
-        images = []
-        while not done:
-            action = eval_env.action_space.sample()
-            obs, reward, done, info = eval_env.step(action)
-            total_reward += reward
-            current_obs = eval_env.raw_rgb_obs
-            rgb_image = utils.obs_to_image(current_obs)
-            images.append(rgb_image)
+        best_model_path = os.path.join(eval_model_dir, "best_model.zip")
+        final_model_path = os.path.join(eval_model_dir, "final_model.zip")
 
-        print(f"Total reward: {total_reward}")
-        imageio.mimsave(f"gifs/{env_name}/{task}/random.gif", images, fps=10, loop=0)
-        
-    elif "eval" in mode:
-        # check if the model exists
-        if not os.path.exists(f"model/{path}/best_model.zip"):
-            print(f"The model model/{path}/best_model.zip does not exist.")
+        if os.path.exists(best_model_path):
+            load_path = best_model_path
+        elif os.path.exists(final_model_path):
+            load_path = final_model_path
+        else:
+            print(f"[ERROR] No model found in {eval_model_dir}")
+            print(f"Checked: {best_model_path}")
+            print(f"Checked: {final_model_path}")
             return [], []
-        
+
+        print(f"[INFO] Loading model from: {load_path}")
+
         if "ppo" in algo:
-            model = PPO.load(f"model/{path}/best_model", env=eval_env)
+            model = PPO.load(load_path, env=eval_env)
         else:
             raise NotImplementedError
 
         average_success_rate = []
         reward_list = []
-        eval_times = 20
+        eval_times = cfg.get("eval_times", 20)
+
         for i in range(eval_times):
             obs = eval_env.reset()
             done = False
             total_reward = []
             images = []
+
             while not done:
                 action, _ = model.predict(obs.copy(), deterministic=True)
                 obs, reward, done, info = eval_env.step(action)
-                total_reward.append(reward)
+                total_reward.append(float(np.asarray(reward).mean()))
 
                 try:
-                    current_obs = eval_env.get_attr('raw_rgb_obs')[0]
-                except:
+                    current_obs = eval_env.get_attr("raw_rgb_obs")[0]
+                except Exception:
                     current_obs = obs
-                rgb_image = utils.obs_to_image(current_obs)
-            
-                image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # (C, H, W)
-                image = image.reshape(1, 3, image.shape[1], image.shape[2]) # (1, C, H, W)
 
-                images.append(image)
-        
-            # Save the images as a GIF
-            imageio.mimsave(f"gifs/{path}/eval-{i}.gif", images, fps=10, loop=0)
-            
-            print(f"Episode {i} total reward: {sum(total_reward)}")
-            average_success_rate.extend(sum(total_reward) >= 10)
-            reward_list.append(sum(total_reward))
+                rgb_image = utils.obs_to_image(current_obs)
+                images.append(rgb_image)
+
+            episode_reward = float(np.sum(total_reward))
+            success = episode_reward >= 10
+
+            gif_path = os.path.join(eval_gif_dir, f"eval-{i}.gif")
+            imageio.mimsave(gif_path, images, fps=10, loop=0)
+
+            print(f"Episode {i} total reward: {episode_reward}, success: {success}")
+
+            average_success_rate.append(success)
+            reward_list.append(episode_reward)
 
         eval_env.close()
+
+        mean_success_rate = np.mean(average_success_rate) * 100
+        se_success_rate = np.std(average_success_rate) / np.sqrt(len(average_success_rate)) * 100
+        mean_reward = np.mean(reward_list)
+        se_reward = np.std(reward_list) / np.sqrt(len(reward_list))
+
+        result_path = os.path.join(work_dir, "eval_result.txt")
+        with open(result_path, "w") as f:
+            f.write(f"success average: {mean_success_rate} SE: {se_success_rate}\n")
+            f.write(f"reward average: {mean_reward} SE: {se_reward}\n")
+            for i, (r, s) in enumerate(zip(reward_list, average_success_rate)):
+                f.write(f"episode {i}: reward={r}, success={s}\n")
+
+        print(f"success average: {mean_success_rate} SE: {se_success_rate}")
+        print(f"reward average: {mean_reward} SE: {se_reward}")
+        print(f"[INFO] Save eval result to {result_path}")
+
         return average_success_rate, reward_list
     elif "train" in mode:
         if "ppo" in algo:
-            model = PPO("MlpPolicy", train_env, ent_coef=0.01, verbose=1, tensorboard_log=tb_log_dir, seed=seed)
+            model = PPO(
+                "MlpPolicy",
+                train_env,
+                ent_coef=cfg.ent_coef,
+                verbose=1,
+                tensorboard_log=tb_log_dir,
+                seed=cfg.seed,
+            )
         else:
             raise NotImplementedError
 
-        model.learn(total_timesteps=1000000, callback=eval_callback)
-        model.save(f"./model/{path}")
+        model.learn(
+            total_timesteps=int(cfg.num_train_steps),
+            callback=eval_callback
+        )
+
+        model.save(os.path.join(model_dir, "final_model"))
 
         train_env.close()
         eval_env.close()
         torch.cuda.empty_cache()
 
-def parse_range_or_list(value):
-    """
-    Parses a string representing a range (e.g., "1-5") or a list (e.g., "1,2,3").
-    Returns a list of integers.
-    """
-    if "-" in value:  # Range format
-        start, end = map(int, value.split("-"))
-        return list(range(start, end + 1))
-    elif "," in value:  # List format
-        return list(map(int, value.split(",")))
-    else:
-        # Single integer
-        return [int(value)]
+@hydra.main(config_path="config", config_name="train_minedojo", version_base=None)
+def main(cfg):
+    print(OmegaConf.to_yaml(cfg))
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--log', default='ERROR') # DEBUG, INFO, WARNING, ERROR, CRITICAL
-    parser.add_argument(
-        '--mode', 
-        type=str, 
-        required=True, 
-        help="Mode of operation: e.g., 'train', 'eval', etc."
-    )
-    parser.add_argument(
-        '--task', 
-        type=str, 
-        required=True, 
-        help="task: e.g., 'hunt_cow', 'combat_spider'"
-    )
-    parser.add_argument(
-        '--algo',
-        type=str,
-        default='ppo',
-        help="algo: e.g., 'ppo'"
-    )
-    parser.add_argument(
-        '--reward_mode', 
-        type=str, 
-        default='dense',
-        help="reward_mode: e.g., 'dense', 'sparse', 'phi', 'RL-VLM-F', 'clip', 'mineclip', 'VLM-AR3L'"
-    )
-    parser.add_argument(
-        '--vlm',
-        type=str,
-        default='',
-        help="vlm: e.g., 'phi3.5', 'MiniCPM-o2.6', 'gemini2.0'"
-    )
-    parser.add_argument(
-        '--reward_k', 
-        type=int, 
-        default=16,
-        help="reward_frame_k: e.g., 4, 8, 16 ..."
-    )
-    parser.add_argument(
-        '--seed', 
-        type=parse_range_or_list, 
-        default=[1, 2, 3],
-        help="random seed, e.g., '1,2,3', '1-3'"
-    )
-    parser.add_argument(
-        '--pos_reward',
-        type=float,
-        default=0.1,
-    )
-    parser.add_argument(
-        '--neg_reward',
-        type=float,
-        default=-0.1,
-    )
-    parser.add_argument(
-        '--absolute_alpha',
-        type=float,
-        default=0.5,
-        help="alpha for absolute reward in VLM-AR3L, between 0 and 1"
-    )
-    parser.add_argument(
-        '--confidence_threshold',
-        type=float,
-        default=0.52,
-        help="confidence threshold for reward assignment in VLM-AR3L, between 0 and 1"
-    )
-    args = parser.parse_args()
-
-    logger = logging.getLogger(__name__)
-    loglevel = args.log
-    numeric_level = getattr(logging, loglevel.upper(), None)
+    numeric_level = getattr(logging, cfg.log_level.upper(), None)
     if not isinstance(numeric_level, int):
-        raise ValueError('Invalid log level: %s' % loglevel)
+        raise ValueError(f"Invalid log level: {cfg.log_level}")
     logging.basicConfig(level=numeric_level)
 
-    mode = args.mode
-    env_name = "minedojo"
-    task = args.task
-    algo = args.algo
-    reward_mode = args.reward_mode
-    vlm = args.vlm
-    reward_k = args.reward_k
-    seed_list = args.seed
-    absolute_alpha = args.absolute_alpha
-    confidence_threshold = args.confidence_threshold
+    train_and_evaluate(cfg)
 
-    if mode == 'random':
-        train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, 1)
-    # python run.py --mode train --task shear_sheep --algo ppo --reward_mode VLM-AR3L --seed 1
-    elif mode == 'train':
-        for seed in seed_list:
-            train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, seed, args.pos_reward, args.neg_reward, absolute_alpha, confidence_threshold)
-    elif mode == 'eval':
-        average_success_rate = []
-        average_reward = []
-        name = f"{reward_mode}_k{reward_k}"
-        if reward_mode == "RL-VLM-F":
-            name = f"{reward_mode}_{vlm}"
-        elif reward_mode == "VLM-AR3L":
-            name = f"{reward_mode}_{vlm}_k{reward_k}"
-        with open(f"./logs_result/{env_name}/{task}/{algo}/{name}/success_rate.txt", "a") as f:
-            for seed in seed_list:
-                success_rate, reward = train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, seed, args.pos_reward, args.neg_reward, absolute_alpha, confidence_threshold)
-                if len(success_rate) == 0:
-                    continue
-                mean_success_rate = np.mean(success_rate)
-                mean_reward = np.mean(reward)
-                print(f"seed {seed} success rate: {mean_success_rate}, reward: {mean_reward}")
-                f.write(f"seed {seed} success rate: {mean_success_rate}, reward: {mean_reward}\n")
-                for i in range(len(reward)):
-                    f.write(f"reward {i}: {reward[i]}, success: {success_rate[i]}\n")
-                average_success_rate.append(mean_success_rate)
-                average_reward.append(mean_reward)
-            print(f"success average: {np.mean(average_success_rate) * 100} SE: {np.std(average_success_rate)/ np.sqrt(len(average_success_rate)) * 100}")
-            print(f"reward average: {np.mean(average_reward)} SE: {np.std(average_reward)/ np.sqrt(len(average_reward))}")
-            f.write(f"success average: {np.mean(average_success_rate) * 100} SE: {np.std(average_success_rate)/ np.sqrt(len(average_success_rate)) * 100}\n")
-            f.write(f"reward average: {np.mean(average_reward)} SE: {np.std(average_reward)/ np.sqrt(len(average_reward))}\n")
+if __name__ == "__main__":
+    main()    
