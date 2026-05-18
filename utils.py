@@ -46,10 +46,10 @@ class ClipObservationWrapper(gym.ObservationWrapper):
             return observation[0]
         return observation
 
-from softgym.utils.normalized_env import normalize
     
 def make_softgym_env(cfg):
     from softgym.registered_env import env_arg_dict, SOFTGYM_ENVS
+    from softgym.utils.normalized_env import normalize
     env_name = cfg.task
     env_kwargs = env_arg_dict[env_name]
     env = normalize(SOFTGYM_ENVS[env_name](**env_kwargs))
@@ -58,10 +58,10 @@ def make_softgym_env(cfg):
 
 def make_classic_control_env(cfg):
     if "CartPole" in cfg.task:
-        from envs.cartpole import CartPoleEnv
+        from envs.gym.cartpole import CartPoleEnv
         env = CartPoleEnv()
     elif "RingWorld" in cfg.task:
-        from envs.ringworld import RingWorldEnv
+        from envs.gym.ringworld import RingWorldEnv
         env = RingWorldEnv()
     else:
         raise NotImplementedError
@@ -87,11 +87,11 @@ def make_metaworld_env(cfg):
     return TimeLimit(NormalizedBoxEnv(env), env.max_path_length)
 
 def make_minedojo_env(task):
-    from animal_zoo import HuntCowDenseRewardEnv
-    from animal_zoo import MilkCowDenseRewardEnv
-    from mob_combat import CombatSpiderDenseRewardEnv
-    from animal_zoo import ShearSheepDenseRewardEnv
-    from animal_zoo import HarvestWaterDenseRewardEnv
+    from envs.minedojo.animal_zoo import HuntCowDenseRewardEnv
+    from envs.minedojo.animal_zoo import MilkCowDenseRewardEnv
+    from envs.minedojo.mob_combat import CombatSpiderDenseRewardEnv
+    from envs.minedojo.animal_zoo import ShearSheepDenseRewardEnv
+    from envs.minedojo.animal_zoo import HarvestWaterDenseRewardEnv
 
     if task == "combat_spider":
         env = CombatSpiderDenseRewardEnv(step_penalty=0, attack_reward=1, success_reward=10)

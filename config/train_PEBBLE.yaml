@@ -5,7 +5,6 @@ defaults:
 experiment: PEBBLE
 
 reward_mode: VLM-AR3L
-absolute_alpha: 0.5
 k: 16
 pos_reward: 1
 neg_reward: -1

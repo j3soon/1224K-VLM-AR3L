@@ -1,0 +1,105 @@
+defaults:
+  - agent: sac
+
+# experiment
+experiment: VLM-AR3L
+exp_name: VLM-AR3L
+mode: train
+
+# Environment
+env: softgym
+task: RopeFlattenEasy
+
+# reward setting
+reward: learn_from_preference
+reward_mode: VLM-AR3L
+
+# VLM-AR3L parameters
+k: 16
+pos_reward: 1
+neg_reward: -1
+absolute_alpha: 0.5
+confidence_threshold: 0.52
+
+# reward learning
+segment: 1
+activation: tanh
+num_seed_steps: 1000
+num_unsup_steps: 9000
+num_interact: 5000
+reward_lr: 1e-4
+reward_batch: 100
+reward_update: 30
+feed_type: 0
+reset_update: 100
+topK: 5
+ensemble_size: 3
+max_feedback: 20000
+large_batch: 10
+label_margin: 0.0
+
+# teacher
+teacher_beta: -1
+teacher_gamma: 1
+teacher_eps_mistake: 0
+teacher_eps_skip: 0
+teacher_eps_equal: 0
+
+# scheduling
+reward_schedule: 0
+
+# training
+num_train_steps: 100100
+replay_buffer_capacity: ${num_train_steps}
+gradient_update: 1
+
+# evaluation
+eval_frequency: 10000
+num_eval_episodes: 1
+device: cuda
+
+# logger
+log_frequency: 10000
+log_save_tb: true
+save_interval: ${num_interact}
+
+# video recorder
+save_video: true
+
+# seed
+seed: 3
+
+# VLM label
+vlm_label: 1
+vlm: gemini2.0
+flip_vlm_label: 0
+sum_segment_score: false
+collect_data_interval: 0
+max_image_difference: 0
+use_first_and_last: 0
+
+# image reward
+image_reward: 1
+resnet: 1
+conv_kernel_sizes: [5, 3, 3, 3]
+conv_n_channels: [16, 32, 64, 128]
+conv_strides: [3, 2, 2, 2]
+image_size: 300
+
+cached_label_path: null
+
+# prompts
+prompt: null
+clip_prompt: null
+
+# load pretrained models
+reward_model_load_dir: "None"
+reward_model_score_load_dir: "None"
+agent_model_load_dir: "None"
+
+save_images: false
+
+# hydra configuration
+hydra:
+  run:
+    dir: ./exp/${exp_name}/${env}/${now:%Y-%m-%d}-${now:%H-%M-%S}/vlm_${vlm_label}${vlm}_reward${reward}_H${diag_gaussian_actor.params.hidden_dim}_L${diag_gaussian_actor.params.hidden_depth}_lr${agent.params.actor_lr}/teacher_b${teacher_beta}_g${teacher_gamma}_m${teacher_eps_mistake}_s${teacher_eps_skip}_e${teacher_eps_equal}/label_smooth_${label_margin}/schedule_${reward_schedule}/${experiment}_init${num_seed_steps}_unsup${num_unsup_steps}_inter${num_interact}_maxfeed${max_feedback}_seg${segment}_act${activation}_Rlr${reward_lr}_Rbatch${reward_batch}_Rupdate${reward_update}_en${ensemble_size}_sample${feed_type}_large_batch${large_batch}_seed${seed}

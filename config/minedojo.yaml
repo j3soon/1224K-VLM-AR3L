@@ -2,6 +2,7 @@ defaults:
   - _self_
 
 experiment: VLM-AR3L
+exp_name: VLM-AR3L
 
 mode: train
 env: minedojo
@@ -21,8 +22,7 @@ confidence_threshold: 0.52
 # reward model
 reward_batch: 100
 reward_lr: 0.0003
-reward_capacity_train: 5000
-# reward_capacity_train: 500000
+reward_capacity_train: 500000
 reward_capacity_eval: 40000
 reward_update: 100
 max_feedback: 500000
@@ -52,9 +52,6 @@ eval_model_dir: null
 save_gif: true
 save_model: true
 log_level: ERROR
-
-# output naming
-exp_name: gemini_template_1
 
 hydra:
   run:

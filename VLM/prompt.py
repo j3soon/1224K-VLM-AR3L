@@ -10,6 +10,8 @@ env_clip_prompts = {
     "soccer-v2": "The soccer ball is in the goal.", 
 
     "CartPole-v1": "pole vertically upright on top of the cart.",
+    "RingWorld": "Keep moving clockwise around the ring.", 
+
     
     "RopeFlattenEasy": "The blue rope is straightened.",
     "PassWater": "The container, which holds water, is as close to the red circle as possible without causing too many water droplets to spill.",
@@ -28,6 +30,7 @@ task_prompt = {
     'soccer-v2': "to minimize the distance between the soccer ball and the goal",
 
     'CartPole-v1': "to balance the brown pole on the black cart to be upright",
+    "RingWorld": "Keep moving clockwise around the ring.", 
 
     "RopeFlattenEasy": "to straighten the blue rope",
     "PassWater": "to move the container, which holds water, to be as close to the red circle as possible without causing too many water droplets to spill",

@@ -398,7 +398,7 @@ def train_and_evaluate(cfg):
         eval_env.close()
         torch.cuda.empty_cache()
 
-@hydra.main(config_path="config", config_name="train_minedojo", version_base=None)
+@hydra.main(config_path="config", version_base=None)
 def main(cfg):
     print(OmegaConf.to_yaml(cfg))
 

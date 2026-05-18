@@ -37,35 +37,14 @@ Download [MineCLIP](https://drive.google.com/file/d/1uaZM1ZLBz2dZWcn85rZmjP7LV6S
 ## Run task
 | Environment | Tasks |
 |---|---|
-| gym | CartPole, RingWorld |
+| gym | CartPole-v1, RingWorld |
 | softgym | PassWater, RopeFlattenEasy |
 | metaworld | drawer-open-v2, sweep-into-v2, soccer-v2 |
 | minedojo | combat_spider, milk_cow, shear_sheep, hunt_cow |
 
 ```sh
-python run_ppo.py mode=train task=hunt_cow reward_mode=VLM-AR3L vlm=gemini2.0 seed=1
-```
-
-```sh
-python run_sac.py \
-  env=metaworld \
-  task=drawer-open-v2 \
-  exp_name=VLM-AR3L \
-  reward_mode=VLM-AR3L \
-  reward=learn_from_preference \
-  vlm_label=1 \
-  vlm=gemini2.0 \
-  image_reward=1 \
-  reward_batch=40 \
-  segment=1 \
-  teacher_eps_mistake=0 \
-  reward_update=10 \
-  num_interact=4000 \
-  max_feedback=20000 \
-  agent.params.actor_lr=0.0003 agent.params.critic_lr=0.0003 gradient_update=1 activation=tanh num_unsup_steps=9000 \
-  num_train_steps=300100 agent.params.batch_size=512 double_q_critic.params.hidden_dim=256 double_q_critic.params.hidden_depth=3 \
-  diag_gaussian_actor.params.hidden_dim=256 diag_gaussian_actor.params.hidden_depth=3  \
-  feed_type=0 teacher_beta=-1 teacher_gamma=1  teacher_eps_skip=0 teacher_eps_equal=0 \
-  num_eval_episodes=1 \
-  seed=1
+python run_sac.py task=CartPole-v1 --config-name gym
+python run_sac.py task=PassWater --config-name softgym
+python run_sac.py task=drawer-open-v2 --config-name metaworld
+python run_ppo.py task=combat_spider --config-name minedojo
 ```

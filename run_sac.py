@@ -55,10 +55,10 @@ class Workspace(object):
         if 'metaworld' in cfg.env:
             self.env = utils.make_metaworld_env(cfg)
             self.log_success = True
-        elif 'gym' in cfg.env:
-            self.env = utils.make_classic_control_env(cfg)
         elif 'softgym' in cfg.env:
             self.env = utils.make_softgym_env(cfg)
+        elif 'gym' in cfg.env:
+            self.env = utils.make_classic_control_env(cfg)
         else:
             self.env = utils.make_env(cfg)
         
@@ -212,10 +212,10 @@ class Workspace(object):
                             rgb_image = rgb_image[100:400, 100:400, :]
                     else:
                         rgb_image = rgb_image[::-1, :, :]
-                elif "gym" in self.cfg.env:
-                    rgb_image = self.env.render(mode='rgb_array')
                 elif 'softgym' in self.cfg.env:
                     rgb_image = self.env.render(mode='rgb_array', hide_picker=True)
+                elif "gym" in self.cfg.env:
+                    rgb_image = self.env.render(mode='rgb_array')
                 else:
                     rgb_image = self.env.render(mode='rgb_array')
 
@@ -505,10 +505,10 @@ class Workspace(object):
                     rgb_image = rgb_image[::-1, :, :]
                     if "drawer" in self.cfg.task or "sweep" in self.cfg.task:
                         rgb_image = rgb_image[100:400, 100:400, :]
-                elif "gym" in self.cfg.env:
-                    rgb_image = self.env.render(mode='rgb_array')
                 elif 'softgym' in self.cfg.env:
                     rgb_image = self.env.render(mode='rgb_array', hide_picker=True)
+                elif "gym" in self.cfg.env:
+                    rgb_image = self.env.render(mode='rgb_array')
                 else:
                     rgb_image = self.env.render(mode='rgb_array')
 
@@ -605,7 +605,7 @@ class Workspace(object):
         self.reward_model.save(model_save_dir, self.step)
     
 # @hydra.main(config_path='config/train_PEBBLE.yaml', strict=True) #version 0.11.3
-@hydra.main(config_path='config', config_name='train_PEBBLE') #version 1.0.0
+@hydra.main(config_path='config') #version 1.0.0
 
 def main(cfg):
     workspace = Workspace(cfg)
