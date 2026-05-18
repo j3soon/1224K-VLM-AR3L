@@ -98,7 +98,9 @@ class Workspace(object):
             reward_mode=cfg.reward_mode,
             k=cfg.k,
             pos_reward=cfg.pos_reward,
-            neg_reward=cfg.neg_reward)
+            neg_reward=cfg.neg_reward,
+            absolute_alpha=cfg.absolute_alpha,
+            confidence_threshold=cfg.confidence_threshold)
         
         # for logging
         self.total_feedback = 0
@@ -542,9 +544,9 @@ class Workspace(object):
                         logits_inverse = self.reward_model.r_hat_pair(image, pre_image)[0] # (2,)
                         probs  = softmax(logits)
                         probs_inverse = softmax(logits_inverse)
-                        if probs[1] > 0.52 and probs_inverse[0] > 0.52:
+                        if probs[1] > self.cfg.confidence_threshold and probs_inverse[0] > self.cfg.confidence_threshold:
                             relative_reward = self.cfg.pos_reward
-                        elif probs[0] > 0.52 and probs_inverse[1] > 0.52:
+                        elif probs[0] > self.cfg.confidence_threshold and probs_inverse[1] > self.cfg.confidence_threshold:
                             relative_reward = self.cfg.neg_reward
                         else:
                             relative_reward = 0

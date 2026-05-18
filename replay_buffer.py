@@ -1,11 +1,10 @@
 import numpy as np
 import torch
-import utils
 from scipy.special import softmax
 
 class ReplayBuffer(object):
     """Buffer to store environment transitions."""
-    def __init__(self, obs_shape, action_shape, capacity, device, window=1, store_image=False, image_size=300, reward_mode="pbRL", k=16, pos_reward=1, neg_reward=-1):
+    def __init__(self, obs_shape, action_shape, capacity, device, window=1, store_image=False, image_size=300, reward_mode="VLM-AR3L", k=16, pos_reward=1, neg_reward=-1, absolute_alpha=0.5, confidence_threshold=0.52):
         self.capacity = capacity
         self.device = device
 
@@ -27,6 +26,8 @@ class ReplayBuffer(object):
         self.k = k
         self.pos_reward = pos_reward
         self.neg_reward = neg_reward
+        self.absolute_alpha = absolute_alpha
+        self.confidence_threshold = confidence_threshold
 
         self.idx = 0
         self.last_save = 0
@@ -82,14 +83,13 @@ class ReplayBuffer(object):
         if not self.store_image:
             batch_size = 200
         else:
-            if self.reward_mode == "R3L" or self.reward_mode == "RL-VLM-F_RR" or self.reward_mode == "combine":
+            if self.reward_mode == "VLM-AR3L":
                 # calculate the batch size based on the episode length
                 batch_size = 0
                 for nd in self.not_dones:
                     batch_size += 1
                     if nd == 0:
                         break
-                print("horizon: ", batch_size)
             else:
                 batch_size = 32
         total_iter = int(self.idx/batch_size)
@@ -111,14 +111,14 @@ class ReplayBuffer(object):
                 inputs = np.transpose(inputs, (0, 3, 1, 2))
                 inputs = inputs.astype(np.float32) / 255.0
 
-                if self.reward_mode == "R3L" or self.reward_mode == "RL-VLM-F_RR" or self.reward_mode == "combine":
+                if self.reward_mode == "VLM-AR3L":
                     pre_inputs = inputs[:-self.k]
                     # the first k-1 elements are inputs[0]
                     pre_inputs = np.concatenate([[inputs[0]] * (self.k), pre_inputs], axis=0)
 
-            pred_reward_r3l = None
-            pred_reward_rlvlmf = None
-            if self.reward_mode == "R3L" or self.reward_mode == "RL-VLM-F_RR" or self.reward_mode == "combine":
+            pred_reward_relative = None
+            pred_reward_absolute = None
+            if self.reward_mode == "VLM-AR3L":
                 pred_reward = np.zeros(inputs.shape[0], dtype=np.float32)
                 inner_batch_size = 32
                 inner_total_iter = int(inputs.shape[0]/inner_batch_size)
@@ -132,9 +132,7 @@ class ReplayBuffer(object):
                     inner_pre_inputs = pre_inputs[inner_index*inner_batch_size:inner_last_index]
                     inner_inputs = inputs[inner_index*inner_batch_size:inner_last_index]
 
-                    if self.reward_mode == "R3L" or self.reward_mode == "combine":
-                        # PBRL version
-                        # logits = predictor.r_hat_batch_pair(inner_pre_inputs, inner_inputs) 
+                    if self.reward_mode == "VLM-AR3L":
                         logits = predictor.r_hat_batch_pair(inner_pre_inputs, inner_inputs)                
                         probs = softmax(logits, axis=1)
                         logits_inverse = predictor.r_hat_batch_pair(inner_inputs, inner_pre_inputs)
@@ -142,27 +140,20 @@ class ReplayBuffer(object):
                         p_fwd0, p_fwd1 = probs[:,0], probs[:,1]
                         p_bwd0, p_bwd1 = probs_inv[:,0], probs_inv[:,1]
                         idx  = np.arange(inner_index*inner_batch_size, inner_last_index)
-                        mask_pos = (p_fwd1 > 0.52) & (p_bwd0 > 0.52)
+                        mask_pos = (p_fwd1 > self.confidence_threshold) & (p_bwd0 > self.confidence_threshold)
                         pred_reward[idx[mask_pos]] = self.pos_reward
-                        mask_neg = (p_fwd0 > 0.52) & (p_bwd1 > 0.52)
+                        mask_neg = (p_fwd0 > self.confidence_threshold) & (p_bwd1 > self.confidence_threshold)
                         pred_reward[idx[mask_neg]] = self.neg_reward    
-                    elif self.reward_mode == "RL-VLM-F_RR":
-                        pre_logits = predictor.r_hat_batch(inner_pre_inputs)
-                        now_logits = predictor.r_hat_batch(inner_inputs)
-                        # if now > pre: logits = pos_reward, elif now < pre: logits = neg_reward, else now == pre: logits = 0
-                        logits = np.where(now_logits > pre_logits, self.pos_reward, np.where(now_logits < pre_logits, self.neg_reward, 0.0))
-                        pred_reward[inner_index*inner_batch_size:inner_last_index] = logits.squeeze(-1)   
-                pred_reward_r3l = pred_reward.reshape(-1, 1)
-            if self.reward_mode == "RL-VLM-F" or self.reward_mode == "combine":
-                pred_reward_rlvlmf = predictor.r_hat_batch(inputs)
+                pred_reward_relative = pred_reward.reshape(-1, 1)
+            if self.reward_mode == "RL-VLM-F" or self.reward_mode == "VLM-AR3L":
+                pred_reward_absolute = predictor.r_hat_batch(inputs)
             
-            if pred_reward_r3l is not None and pred_reward_rlvlmf is not None:
-                pred_reward = 0.5 * (pred_reward_r3l + pred_reward_rlvlmf)
-                # pred_reward = 1 * pred_reward_r3l + 0.0 * pred_reward_rlvlmf
-            elif pred_reward_r3l is not None:
-                pred_reward = pred_reward_r3l
-            elif pred_reward_rlvlmf is not None:
-                pred_reward = pred_reward_rlvlmf
+            if pred_reward_relative is not None and pred_reward_absolute is not None:
+                pred_reward = self.absolute_alpha * pred_reward_absolute + (1 - self.absolute_alpha) * pred_reward_relative
+            elif pred_reward_relative is not None:
+                pred_reward = pred_reward_relative
+            elif pred_reward_absolute is not None:
+                pred_reward = pred_reward_absolute
 
             self.rewards[index*batch_size:last_index] = pred_reward
             

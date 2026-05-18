@@ -9,7 +9,8 @@ absolute_alpha: 0.5
 k: 16
 pos_reward: 1
 neg_reward: -1
-
+absolute_alpha: 0.5
+confidence_threshold: 0.52
 # reward learning
 segment: 50
 activation: tanh
