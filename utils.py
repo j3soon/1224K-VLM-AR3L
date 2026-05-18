@@ -4,7 +4,7 @@ import PIL.Image as Image
 from gym.wrappers.time_limit import TimeLimit
 import gym
 from gym.spaces import Box
-from VLM import env_query_prompt, env_clip_prompts, two_label_env_query_prompt
+from VLM import env_clip_prompts
 from VLM import phi, clip, deepseekVL
 from scipy.special import softmax
 import random

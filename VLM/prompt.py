@@ -4,9 +4,10 @@ env_clip_prompts = {
     'hunt_cow': "hunt a cow",
     'shear_sheep': "shear a sheep",
     'harvest_water': "harvest a water",
-    "drawer-open-v2": "The drawer is opened.", # let's try the flipped version.
-    "sweep-into-v2": "The green cube is in the hole.", # unsolved there is reward issue
-    "soccer-v2": "The soccer ball is in the goal.", # not solved, there is reward issue
+
+    "drawer-open-v2": "The drawer is opened.",
+    "sweep-into-v2": "The green cube is in the hole.", 
+    "soccer-v2": "The soccer ball is in the goal.", 
 
     "CartPole-v1": "pole vertically upright on top of the cart.",
     
@@ -18,16 +19,14 @@ env_clip_prompts = {
 task_prompt = {
     'combat_spider': "combat a spider",
     'milk_cow': "milk a cow",
-    # 'milk_cow': "find and milk a cow",
     'hunt_cow': "hunt a cow",
-    # 'hunt_cow': "hunt a cow. If a cow is hit, it will turn red",
     'shear_sheep': "shear a sheep",
     'harvest_water': "harvest a water",
-    # 'drawer-open-v2': "to open the drawer",
+
     'drawer-open-v2': "to maximize drawer opening",
     'sweep-into-v2': "to minimize the distance between the green cube and the hole",
-    # 'soccer-v2': "to move the soccer ball into the goal"
     'soccer-v2': "to minimize the distance between the soccer ball and the goal",
+
     'CartPole-v1': "to balance the brown pole on the black cart to be upright",
 
     "softgym_RopeFlattenEasy": "to straighten the blue rope",
@@ -72,10 +71,6 @@ The goal is {}.
 Is the goal better achieved in Image 1 or Image 2? 
 Reply a single line of 1 if the goal is better achieved in Image 1, or 2 if it is better achieved in Image 2.
 Reply 0 if unsure or there is no difference."""
-# query_prompt = """
-# The goal is {}.  
-# Relative to Image 1, does Image 2 move closer to the goal?  
-# Reply with a single word yes or no."""
 
 env_query_prompt = {}
 for env_name, prompt in task_prompt.items():
