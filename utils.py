@@ -11,7 +11,6 @@ from VLM import phi, clip, deepseekVL
 from scipy.special import softmax
 import random
 from rlkit.envs.wrappers import NormalizedBoxEnv
-import metaworld.envs.mujoco.env_dict as _env_dict
 import os
 
 
@@ -47,10 +46,10 @@ class ClipObservationWrapper(gym.ObservationWrapper):
             return observation[0]
         return observation
 
-from softgym.registered_env import env_arg_dict, SOFTGYM_ENVS
 from softgym.utils.normalized_env import normalize
     
 def make_softgym_env(cfg):
+    from softgym.registered_env import env_arg_dict, SOFTGYM_ENVS
     env_name = cfg.task
     env_kwargs = env_arg_dict[env_name]
     env = normalize(SOFTGYM_ENVS[env_name](**env_kwargs))
@@ -70,6 +69,8 @@ def make_classic_control_env(cfg):
     return TimeLimit(NormalizedBoxEnv(env), env.horizon)
 
 def make_metaworld_env(cfg):
+    import metaworld.envs.mujoco.env_dict as _env_dict
+
     env_name = cfg.task
     if env_name in _env_dict.ALL_V2_ENVIRONMENTS:
         env_cls = _env_dict.ALL_V2_ENVIRONMENTS[env_name]
@@ -107,7 +108,7 @@ def make_minedojo_env(task):
     return env
     
 class make_reward_env(gym.Wrapper):
-    def __init__(self, env, env_name, task, reward_mode, reward_steps:int=1, reward_k:int=16, reward_model=None, pos_reward:float=0.1, neg_reward:float=-0.1):
+    def __init__(self, env, env_name, task, reward_mode, reward_k:int=16, reward_model=None, pos_reward:float=0.1, neg_reward:float=-0.1, absolute_alpha:float=0.5, confidence_threshold:float=0.52):
         super().__init__(env)
         self.env = env
         self.env_name = env_name
@@ -115,12 +116,13 @@ class make_reward_env(gym.Wrapper):
 
         self._task = task
         self._reward_mode = reward_mode
-        self._reward_steps = reward_steps
         self._reward_k = reward_k
         self.reward_model = reward_model
         self._pos_reward = pos_reward
         self._neg_reward = neg_reward
-        print(f"reward_mode: {self._reward_mode}, reward_steps: {self._reward_steps}, reward_k: {self._reward_k}")
+        self._absolute_alpha = absolute_alpha
+        self._confidence_threshold = confidence_threshold
+
         self._prev_image = [None] * self._reward_k
         self._prev_reward = [0] * self._reward_k
         self.vlm_acc = 0
@@ -197,16 +199,16 @@ class make_reward_env(gym.Wrapper):
                     logits_inverse = self.reward_model.r_hat_pair(image, prev_image)[0] # (2,)
                     probs  = softmax(logits)
                     probs_inverse = softmax(logits_inverse)
-                    if probs[1] > 0.52 and probs_inverse[0] > 0.52:
+                    if probs[1] > self._confidence_threshold and probs_inverse[0] > self._confidence_threshold:
                         reward_relative = self._pos_reward
-                    elif probs[0] > 0.52 and probs_inverse[1] > 0.52:
+                    elif probs[0] > self._confidence_threshold and probs_inverse[1] > self._confidence_threshold:
                         reward_relative = self._neg_reward
                     else:
                         reward_relative = 0
 
                 reward_absolute = self.reward_model.r_hat(image)
 
-                reward = (reward_relative + reward_absolute) / 2
+                reward = self._absolute_alpha * reward_absolute + (1 - self._absolute_alpha) * reward_relative
 
                 self._prev_image[idx] = image
             self.reward_model.train()          

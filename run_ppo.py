@@ -178,7 +178,7 @@ class SaveRewardModelCallback(BaseCallback):
             print(f"Saved reward model to {self.save_path} at step {steps}")
         return True
     
-def train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_steps, reward_k, seed, pos_reward=0.1, neg_reward=-0.1):
+def train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, seed, pos_reward=0.1, neg_reward=-0.1, absolute_alpha=0.5, confidence_threshold=0.52):
     if reward_mode == "RL-VLM-F":
         name = f"{reward_mode}_{vlm}"
     elif reward_mode == "VLM-AR3L":
@@ -220,7 +220,7 @@ def train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_step
 
     if "train" in mode:
         train_env = utils.make_minedojo_env(task)
-        train_env = utils.make_reward_env(train_env, env_name, task, reward_mode, reward_steps, reward_k, reward_model, pos_reward, neg_reward)
+        train_env = utils.make_reward_env(train_env, env_name, task, reward_mode, reward_k, reward_model, pos_reward, neg_reward, absolute_alpha, confidence_threshold)
     
     # Load the MineCLIP model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -413,12 +413,6 @@ if __name__ == "__main__":
         help="vlm: e.g., 'phi3.5', 'MiniCPM-o2.6', 'gemini2.0'"
     )
     parser.add_argument(
-        '--reward_steps', 
-        type=int, 
-        default=1,
-        help="reward_steps: e.g., 1, 2, 4 ..."
-    )
-    parser.add_argument(
         '--reward_k', 
         type=int, 
         default=16,
@@ -440,6 +434,18 @@ if __name__ == "__main__":
         type=float,
         default=-0.1,
     )
+    parser.add_argument(
+        '--absolute_alpha',
+        type=float,
+        default=0.5,
+        help="alpha for absolute reward in VLM-AR3L, between 0 and 1"
+    )
+    parser.add_argument(
+        '--confidence_threshold',
+        type=float,
+        default=0.52,
+        help="confidence threshold for reward assignment in VLM-AR3L, between 0 and 1"
+    )
     args = parser.parse_args()
 
     logger = logging.getLogger(__name__)
@@ -455,16 +461,17 @@ if __name__ == "__main__":
     algo = args.algo
     reward_mode = args.reward_mode
     vlm = args.vlm
-    reward_steps = args.reward_steps
     reward_k = args.reward_k
     seed_list = args.seed
-    
+    absolute_alpha = args.absolute_alpha
+    confidence_threshold = args.confidence_threshold
+
     if mode == 'random':
-        train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_steps, reward_k, 1)
+        train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, 1)
     # python run.py --mode train --task shear_sheep --algo ppo --reward_mode VLM-AR3L --seed 1
     elif mode == 'train':
         for seed in seed_list:
-            train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_steps, reward_k, seed, args.pos_reward, args.neg_reward)
+            train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, seed, args.pos_reward, args.neg_reward, absolute_alpha, confidence_threshold)
     elif mode == 'eval':
         average_success_rate = []
         average_reward = []
@@ -475,7 +482,7 @@ if __name__ == "__main__":
             name = f"{reward_mode}_{vlm}_k{reward_k}"
         with open(f"./logs_result/{env_name}/{task}/{algo}/{name}/success_rate.txt", "a") as f:
             for seed in seed_list:
-                success_rate, reward = train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_steps, reward_k, seed, args.pos_reward, args.neg_reward)
+                success_rate, reward = train_and_evaluate(mode, env_name, task, algo, reward_mode, vlm, reward_k, seed, args.pos_reward, args.neg_reward, absolute_alpha, confidence_threshold)
                 if len(success_rate) == 0:
                     continue
                 mean_success_rate = np.mean(success_rate)
