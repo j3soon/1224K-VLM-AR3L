@@ -65,3 +65,38 @@ python run_ppo.py task=combat_spider --config-name minedojo
 python run_ppo.py task=milk_cow --config-name minedojo
 python run_ppo.py task=shear_sheep --config-name minedojo
 python run_ppo.py task=hunt_cow --config-name minedojo
+```
+
+## Eval VLM Reasoning
+
+The evaluation data is stored under:
+
+```text
+VLM/data/{task}/{label}/{id}{0/1}.png
+````
+
+Example:
+
+```text
+VLM-AR3L/VLM/data/CartPole-v1/0/00.png
+VLM-AR3L/VLM/data/CartPole-v1/0/01.png
+```
+
+where:
+
+* `{task}` is the environment task name (e.g., `CartPole-v1`)
+* `{label}` is the preference label
+* `{id}` is the sample index
+* `{0/1}` indicates the image in the preference pair
+
+For each sample:
+
+* `{id}0.png` corresponds to `image0`
+* `{id}1.png` corresponds to `image1`
+
+Each label directory contains 50 preference pairs.
+
+Preference labels are defined as:
+
+* `0`: `image0` is preferred
+* `1`: `image1` is preferred
