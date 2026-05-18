@@ -42,9 +42,26 @@ Download [MineCLIP](https://drive.google.com/file/d/1uaZM1ZLBz2dZWcn85rZmjP7LV6S
 | metaworld | drawer-open-v2, sweep-into-v2, soccer-v2 |
 | minedojo | combat_spider, milk_cow, shear_sheep, hunt_cow |
 
+> **Note**
+> - `gym`, `softgym`, and `metaworld` currently support **SAC only**.
+> - `minedojo` currently supports **PPO only**.
+
 ```sh
+# gym
 python run_sac.py task=CartPole-v1 --config-name gym
+python run_sac.py task=RingWorld --config-name gym
+
+# softgym
 python run_sac.py task=PassWater --config-name softgym
+python run_sac.py task=RopeFlattenEasy --config-name softgym
+
+# metaworld
 python run_sac.py task=drawer-open-v2 --config-name metaworld
+python run_sac.py task=sweep-into-v2 --config-name metaworld
+python run_sac.py task=soccer-v2 --config-name metaworld
+
+# minedojo
 python run_ppo.py task=combat_spider --config-name minedojo
-```
+python run_ppo.py task=milk_cow --config-name minedojo
+python run_ppo.py task=shear_sheep --config-name minedojo
+python run_ppo.py task=hunt_cow --config-name minedojo
