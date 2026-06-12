@@ -194,6 +194,8 @@ class Workspace(object):
             rewards = []
             t_idx = 0
             while not done:
+                step_start_time = time.time()
+
                 with utils.eval_mode(self.agent):
                     action = self.agent.act(obs, sample=False)
                 try:
@@ -240,12 +242,15 @@ class Workspace(object):
                 t_idx += 1
                 if self.cfg.mode == 'eval' and t_idx > 100:
                     break
-                    
+            step_time = time.time() - step_start_time
+            print("===== Eval Speed =====")
+            print(f"Avg step time: {np.mean(step_time):.4f} sec")
+
             all_ep_infos.append(ep_info)
                 
             save_gif_path = os.path.join(save_gif_dir, 'step{:07}_episode{:02}_{}.gif'.format(self.step, episode, round(true_episode_reward, 2)))
 
-            utils.save_numpy_as_gif(np.array(images_with_reward), save_gif_path)
+            utils.save_numpy_as_gif(np.array(images), save_gif_path)
             if save_additional:
                 save_image_dir = os.path.join(self.logger._log_dir, 'eval_images')
                 if not os.path.exists(save_image_dir):

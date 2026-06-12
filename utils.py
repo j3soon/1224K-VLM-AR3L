@@ -12,7 +12,7 @@ from scipy.special import softmax
 import random
 from rlkit.envs.wrappers import NormalizedBoxEnv
 import os
-
+from moviepy.editor import ImageSequenceClip
 
 def obs_to_image(obs):
     if isinstance(obs, torch.Tensor):
