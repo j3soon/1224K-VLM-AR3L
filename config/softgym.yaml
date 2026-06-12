@@ -96,7 +96,6 @@ clip_prompt: null
 reward_model_load_dir: "None"
 reward_model_score_load_dir: "None"
 agent_model_load_dir: "None"
-
 save_images: false
 
 # hydra configuration

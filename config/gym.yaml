@@ -1,5 +1,5 @@
 defaults:
-  - agent: sac
+  - agent: sac_H1000_L2
 
 # experiment
 experiment: VLM-AR3L

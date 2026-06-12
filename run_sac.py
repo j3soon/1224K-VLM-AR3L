@@ -49,7 +49,7 @@ class Workspace(object):
         self.log_success = False
         
         current_file_path = os.path.dirname(os.path.realpath(__file__))
-        os.system("cp {}/prompt.py {}/".format(current_file_path, self.logger._log_dir))
+        os.system("cp {}/VLM/prompt.py {}/".format(current_file_path, self.logger._log_dir))
         
         # make env
         if 'metaworld' in cfg.env:
@@ -244,7 +244,7 @@ class Workspace(object):
                     break
             step_time = time.time() - step_start_time
             print("===== Eval Speed =====")
-            print(f"Avg step time: {np.mean(step_time):.4f} sec")
+            print(f"Avg step time: {step_time / t_idx:.6f} sec")
 
             all_ep_infos.append(ep_info)
                 
