@@ -45,7 +45,7 @@ num_eval_episodes: 5
 ent_coef: 0.01
 
 # eval
-eval_times: 20
+eval_times: 5
 eval_model_dir: null
 
 # logging / saving
