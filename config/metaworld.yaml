@@ -4,7 +4,7 @@ defaults:
 # experiment
 experiment: VLM-AR3L
 exp_name: VLM-AR3L
-mode: eval
+mode: train
 
 # Environment
 env: metaworld
@@ -94,7 +94,7 @@ clip_prompt: "The green drawer is completely opened."
 # load pretrained models
 reward_model_load_dir: "None"
 reward_model_score_load_dir: "None"
-agent_model_load_dir: "/home/k/Desktop/K/RL-VLM-F/exp/combine_k16_gemini2.0/softgym_RopeFlattenEasy/2025-12-12-21-26-05/vlm_1gemini2.0_rewardlearn_from_preference_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg1_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed1/models"
+agent_model_load_dir: "None"
 save_images: false
 
 # hydra configuration

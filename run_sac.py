@@ -156,11 +156,11 @@ class Workspace(object):
         
         if self.cfg.reward_model_load_dir != "None":
             print("loading reward model at {}".format(self.cfg.reward_model_load_dir))
-            self.reward_model.load(self.cfg.reward_model_load_dir, 100100) 
+            self.reward_model.load(self.cfg.reward_model_load_dir, 1000000) 
                 
         if self.cfg.agent_model_load_dir != "None":
             print("loading agent model at {}".format(self.cfg.agent_model_load_dir))
-            self.agent.load(self.cfg.agent_model_load_dir, 100100) 
+            self.agent.load(self.cfg.agent_model_load_dir, 1000000) 
 
         if self.reward == 'clip':
             self.CLIP = clip()
@@ -178,7 +178,6 @@ class Workspace(object):
         for episode in range(self.cfg.num_eval_episodes):
             print("evaluating episode {}".format(episode))
             images = []
-            images_with_reward = []
             obs = self.env.reset()
             if "metaworld" in self.cfg.env:
                 obs = obs[0]
@@ -194,8 +193,6 @@ class Workspace(object):
             rewards = []
             t_idx = 0
             while not done:
-                step_start_time = time.time()
-
                 with utils.eval_mode(self.agent):
                     action = self.agent.act(obs, sample=False)
                 try:
@@ -242,9 +239,6 @@ class Workspace(object):
                 t_idx += 1
                 if self.cfg.mode == 'eval' and t_idx > 100:
                     break
-            step_time = time.time() - step_start_time
-            print("===== Eval Speed =====")
-            print(f"Avg step time: {step_time / t_idx:.6f} sec")
 
             all_ep_infos.append(ep_info)
                 

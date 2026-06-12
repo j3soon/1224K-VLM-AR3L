@@ -52,13 +52,13 @@ python run_sac.py task=CartPole-v1 --config-name gym
 python run_sac.py task=RingWorld --config-name gym
 
 # softgym
-python run_sac.py task=PassWater --config-name softgym
 python run_sac.py task=RopeFlattenEasy --config-name softgym
+python run_sac.py task=PassWater --config-name softgym
 
 # metaworld
-python run_sac.py task=drawer-open-v2 --config-name metaworld
-python run_sac.py task=sweep-into-v2 --config-name metaworld
 python run_sac.py task=soccer-v2 --config-name metaworld
+python run_sac.py task=sweep-into-v2 --config-name metaworld
+python run_sac.py task=drawer-open-v2 --config-name metaworld
 
 # minedojo
 python run_ppo.py task=combat_spider --config-name minedojo
