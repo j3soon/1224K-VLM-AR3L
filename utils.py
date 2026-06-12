@@ -12,7 +12,6 @@ from scipy.special import softmax
 import random
 from rlkit.envs.wrappers import NormalizedBoxEnv
 import os
-from moviepy.editor import ImageSequenceClip
 
 def obs_to_image(obs):
     if isinstance(obs, torch.Tensor):
@@ -529,6 +528,7 @@ def save_numpy_as_gif(array, filename, fps=20, scale=1.0):
         array = array[..., np.newaxis] * np.ones(3)
 
     # make the moviepy clip
+    from moviepy.editor import ImageSequenceClip
     clip = ImageSequenceClip(list(array), fps=fps).resize(scale)
     clip.write_gif(filename, fps=fps)
     return clip
